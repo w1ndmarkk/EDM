@@ -1,0 +1,196 @@
+{
+  "extName": {
+    "message": "EDM"
+  },
+  "extDesc": {
+    "message": "Tarayıcı indirmelerini EDM uygulamasına yönlendirir ve sayfalardaki videoları yakalar."
+  },
+  "menuDownloadLink": {
+    "message": "EDM ile indir"
+  },
+  "menuPageVideo": {
+    "message": "Bu sayfadaki videoyu indir (yt-dlp)"
+  },
+  "notifOfflineTitle": {
+    "message": "EDM çalışmıyor"
+  },
+  "notifOfflineBody": {
+    "message": "Uygulamayı açın ve tekrar deneyin."
+  },
+  "popupConnecting": {
+    "message": "Bağlanıyor…"
+  },
+  "popupConnected": {
+    "message": "Bağlı (v$VERSION$)",
+    "placeholders": {"version":{"content":"$1"}}
+  },
+  "popupActive": {
+    "message": "$COUNT$ aktif",
+    "placeholders": {"count":{"content":"$1"}}
+  },
+  "popupOffline": {
+    "message": "Uygulama kapalı"
+  },
+  "popupOfflineBox": {
+    "message": "Uygulama çalışmıyor. EDM uygulamasını açın."
+  },
+  "popupIntercept": {
+    "message": "İndirmeleri uygulamaya yönlendir"
+  },
+  "popupSniff": {
+    "message": "Sayfadaki videoları yakala"
+  },
+  "popupPageVideo": {
+    "message": "Bu sayfadaki videoyu indir (yt-dlp)"
+  },
+  "popupPageLink": {
+    "message": "Sayfa adresini dosya olarak indir"
+  },
+  "popupMediaTitle": {
+    "message": "Yakalanan medya"
+  },
+  "popupNoMedia": {
+    "message": "Bu sekmede medya yakalanmadı. Video oynatmayı başlatınca burada görünür."
+  },
+  "popupSettings": {
+    "message": "Ayarlar"
+  },
+  "popupPort": {
+    "message": "Uygulama portu"
+  },
+  "popupMinSize": {
+    "message": "Yalnızca şu boyuttan büyükleri yakala (MB, 0 = hepsi)"
+  },
+  "popupDownload": {
+    "message": "İndir"
+  },
+  "popupSent": {
+    "message": "Gönderildi"
+  },
+  "popupError": {
+    "message": "Hata"
+  },
+  "popupSending": {
+    "message": "Gönderiliyor…"
+  },
+  "popupStarted": {
+    "message": "yt-dlp başlatıldı ✓"
+  },
+  "popupFailed": {
+    "message": "Gönderilemedi"
+  },
+  "kindHls": {
+    "message": "HLS akışı"
+  },
+  "kindDash": {
+    "message": "DASH akışı"
+  },
+  "kindMedia": {
+    "message": "medya"
+  },
+  "popupDownloadsTitle": {
+    "message": "İndirmeler"
+  },
+  "popupNoDownloads": {
+    "message": "Aktif indirme yok. Başlatılan indirmeler ilerlemesini burada ve araç çubuğu rozetinde gösterir."
+  },
+  "stateQueued": {
+    "message": "Sırada"
+  },
+  "statePaused": {
+    "message": "Duraklatıldı"
+  },
+  "stateProbing": {
+    "message": "Başlatılıyor…"
+  },
+  "stateCompleted": {
+    "message": "Tamamlandı"
+  },
+  "stateFailed": {
+    "message": "Başarısız"
+  },
+  "stateCancelled": {
+    "message": "İptal edildi"
+  },
+  "popupPause": {
+    "message": "Duraklat"
+  },
+  "popupResume": {
+    "message": "Sürdür"
+  },
+  "popupCancel": {
+    "message": "İptal"
+  },
+  "popupRemove": {
+    "message": "Listeden kaldır"
+  },
+  "panelVideo": {
+    "message": "Bu videoyu indir"
+  },
+  "panelAudio": {
+    "message": "Bu sesi indir"
+  },
+  "panelHelpTitle": {
+    "message": "Bu nedir?"
+  },
+  "panelHide": {
+    "message": "Bu oynatıcıda gizle"
+  },
+  "panelHelp": {
+    "message": "EDM bu sayfada bir oynatıcı buldu. Bir kalite seçin, EDM onu yt-dlp ile indirsin. Bu paneli araç çubuğundaki EDM penceresinden kapatabilirsiniz."
+  },
+  "panelDefaultDetail": {
+    "message": "EDM ayarları"
+  },
+  "panelLoading": {
+    "message": "Kaliteler okunuyor…"
+  },
+  "panelOffline": {
+    "message": "EDM çalışmıyor"
+  },
+  "panelSent": {
+    "message": "EDM'ye gönderildi ✓"
+  },
+  "popupPanel": {
+    "message": "Videolarda indirme panelini göster"
+  },
+  "panelDownloadAll": {
+    "message": "Tümünü indir"
+  },
+  "fileKind": {
+    "message": "$1 dosyası"
+  },
+  "sizeBytes": {
+    "message": "$1 bayt"
+  },
+  "durHours": {
+    "message": "$1 sa $2 dk"
+  },
+  "durMinutes": {
+    "message": "$1 dk $2 sn"
+  },
+  "durSeconds": {
+    "message": "$1 sn"
+  },
+  "liveStream": {
+    "message": "canlı yayın"
+  },
+  "protectedStream": {
+    "message": "korumalı (DRM), indirilemez"
+  },
+  "hlsStream": {
+    "message": "HLS akışı"
+  },
+  "panelNothing": {
+    "message": "Bu sayfada henüz indirilecek bir şey bulunamadı. Videoyu oynatmaya başlayın, ardından bu menüyü yeniden açın."
+  },
+  "panelPlaylist": {
+    "message": "Oynatma listesinin tamamını indir…"
+  },
+  "panelPlaylistDetail": {
+    "message": "EDM'de açılır"
+  },
+  "menuPlaylist": {
+    "message": "Oynatma listesini EDM ile indir"
+  }
+}

@@ -1,0 +1,13 @@
+# Build output
+build/
+src-tauri/target/
+src-tauri/gen/
+
+# Bundled tools (downloaded by scripts/fetch-tools.ps1)
+Tools/
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .layout { display: flex; height: 100vh; }
+  .tabs { width: 200px; flex: none; padding: 14px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .tabs h2 { padding: 4px 12px 14px; font-size: 18px; }
+  .tab { position: relative; display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius);
+         background: none; color: var(--text); font: inherit; text-align: left; }
+  .tab:hover { background: var(--hover); }
+  .tab.active { background: var(--hover); font-weight: 600; }
+  .tab.active::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--accent); }
+  .pane { flex: 1; overflow-y: auto; padding: 18px 22px 28px 10px; }
+  .page { display: none; max-width: 760px; }
+  .page.active { display: block; }
+  .page > h1 { font-size: 24px; margin: 0 2px 16px; }
+  .slider-row { display: flex; align-items: center; gap: 12px; }
+  .slider-row input[type=range] { width: 180px; }
+  .stepper { display: inline-flex; align-items: center; gap: 4px; }
+  .stepper span { min-width: 26px; text-align: center; font-variant-numeric: tabular-nums; }
+  .browser-status { display: inline-flex; align-items: center; gap: 6px; }
+  .browser-status svg { width: 16px; height: 16px; }
+  .item .sub-actions { display: flex; gap: 6px; flex: none; }
+  .path { font-size: 12px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  input.wide { width: 100%; }
+</style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="tabs" id="tabs">
+      <h2 data-i18n="Settings"></h2>
+    </nav>
+    <main class="pane">
+      <!-- General -->
+      <section class="page" id="page-general">
+        <h1 data-i18n="General"></h1>
+        <div class="section-title" data-i18n="Downloads"></div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><span data-i18n="Download folder"></span><span class="path selectable" id="downloadDir"></span></div>
+            <div class="sub-actions"><button class="btn" id="showDir" data-i18n="Show"></button><button class="btn" id="chooseDir" data-i18n="Choose…"></button></div>
+          </div>
+          <label class="item"><div class="grow"><span data-i18n="Sort downloads into category folders"></span>
+            <span class="caption" data-i18n="Compressed, Documents, Music, Programs and Video subfolders of the download folder; other files are saved in the download folder itself."></span></div>
+            <span class="switch"><input type="checkbox" data-setting="organizeByCategory"><span></span></span></label>
+        </div>
+
+        <div class="section-title" data-i18n="Connections"></div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><span id="segLabel"></span><span class="caption" data-i18n="Each file is downloaded with up to this many parallel connections (4–10 recommended)."></span></div>
+            <div class="slider-row"><input type="range" min="1" max="16" step="1" id="segCount"></div>
+          </div>
+          <div class="item">
+            <div class="grow" id="concLabel"></div>
+            <div class="stepper"><button class="btn small" id="concMinus">−</button><button class="btn small" id="concPlus">+</button></div>
+          </div>
+        </div>
+
+        <div class="section-title" data-i18n="Behaviour"></div>
+        <div class="card">
+          <label class="item"><div class="grow" data-i18n="Start new downloads immediately"></div><span class="switch"><input type="checkbox" data-setting="autoStart"><span></span></span></label>
+          <label class="item"><div class="grow" data-i18n="Show a notification when a download completes"></div><span class="switch"><input type="checkbox" data-setting="notifyOnComplete"><span></span></span></label>
+          <label class="item"><div class="grow" data-i18n="Open the download window when a download starts"></div><span class="switch"><input type="checkbox" data-setting="showDetailOnStart"><span></span></span></label>
+          <label class="item"><div class="grow" data-i18n="Close the download window automatically when completed"></div><span class="switch"><input type="checkbox" data-setting="autoCloseDetail"><span></span></span></label>
+          <label class="item"><div class="grow"><span data-i18n="Watch the clipboard for links and ask to download them"></span>
+            <span class="caption" data-i18n="Only links that point to a captured file type trigger the prompt. You can also paste a link into the main window with Ctrl+V."></span></div>
+            <span class="switch"><input type="checkbox" data-setting="watchClipboard"><span></span></span></label>
+        </div>
+
+        <div class="section-title" data-i18n="System tray"></div>
+        <div class="card">
+          <label class="item"><div class="grow"><span data-i18n="Start EDM in the background when Windows starts"></span>
+            <span class="caption" data-i18n="EDM starts in the system tray without a window, so browser downloads are captured right after boot."></span>
+            <span class="caption danger hidden" id="autostartError"></span></div>
+            <span class="switch"><input type="checkbox" id="autostart"><span></span></span></label>
+          <label class="item"><div class="grow"><span data-i18n="Open only the tray icon when EDM is started by hand"></span>
+            <span class="caption" data-i18n="The app keeps running in the system tray so browser extensions can hand over downloads at any time. Closing the window does not quit; use Quit from the tray icon."></span></div>
+            <span class="switch"><input type="checkbox" data-setting="startInTray"><span></span></span></label>
+        </div>
+
+        <div class="section-title hidden updates-only" data-i18n="Updates"></div>
+        <div class="card hidden updates-only">
+          <label class="item"><div class="grow" data-i18n="Check for updates automatically (GitHub Releases)"></div><span class="switch"><input type="checkbox" data-setting="checkForUpdates"><span></span></span></label>
+          <div class="item">
+            <div class="grow"><span id="curVersion"></span><span class="caption" id="latestVersion"></span><span class="caption" id="lastCheck"></span><span class="caption danger" id="updateError"></span></div>
+            <button class="btn" id="checkNow"></button>
+          </div>
+        </div>
+      </section>
+
+      <!-- File types -->
+      <section class="page" id="page-filetypes">
+        <h1 data-i18n="File Types"></h1>
+        <div class="section-title" data-i18n="Downloaded file types"></div>
+        <p class="caption" style="margin:0 2px 10px" data-i18n="Browser downloads and copied links with these extensions are handed to the app. Everything else stays in the browser."></p>
+        <div class="card">
+          <div id="captureTypes"></div>
+          <div id="excludedSites"></div>
+          <div class="list-editor">
+            <span class="list-label" data-i18n="Don't start downloading automatically from the following addresses:"></span>
+            <div class="row"><button class="btn" id="editAddresses" data-i18n="Edit list…"></button><span class="caption" id="addressCount"></span></div>
+          </div>
+        </div>
+      </section>
+
+      <dialog id="addressDialog">
+        <div class="dlg-body" style="width:560px">
+          <h3 data-i18n="Don't start downloading automatically from the following addresses:"></h3>
+          <p class="caption" data-i18n="One address per line. An address matches every URL that starts with it; * and ? are allowed, e.g. https://example.com/files/*"></p>
+          <textarea id="addressText" rows="10" spellcheck="false" class="list-box"></textarea>
+        </div>
+        <div class="dlg-foot">
+          <div class="spacer"></div>
+          <button class="btn" id="addressCancel" data-i18n="Cancel"></button>
+          <button class="btn primary" id="addressSave" data-i18n="OK"></button>
+        </div>
+      </dialog>
+
+      <!-- Browser extensions -->
+      <section class="page" id="page-browser">
+        <h1 data-i18n="Browser Extensions"></h1>
+        <p class="caption" style="margin:0 2px" data-i18n="The guided setup walks you through each installed browser one at a time: Google Chrome, Microsoft Edge and Brave load the extension from a folder."></p>
+        <div class="row" style="margin:14px 0 12px">
+          <button class="btn primary" id="openWizard"></button>
+          <button class="btn" id="refreshBrowsers" data-i18n="Refresh Status"></button>
+        </div>
+        <div class="card" id="browserList"></div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><span data-i18n="Plugin folder"></span><span class="path selectable" id="pluginsRoot"></span></div>
+            <button class="btn" id="showPlugins" data-i18n="Show Plugin Folder"></button>
+          </div>
+        </div>
+
+        <div class="section-title" data-i18n="Local bridge"></div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><div class="row"><span class="dot" id="bridgeDot"></span><span id="bridgeText"></span></div>
+              <span class="caption" data-i18n="The extension uses port 48213 by default. If you change it here, enter the same port in the extension settings."></span></div>
+            <span data-i18n="Port"></span><input type="number" min="1024" max="65535" id="port" style="width:96px">
+          </div>
+        </div>
+      </section>
+
+      <!-- Video -->
+      <section class="page" id="page-video">
+        <h1 data-i18n="Video"></h1>
+        <div class="section-title" data-i18n="Site login (YouTube age verification, members-only videos)"></div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><span id="loginState"></span><span class="caption" id="loginDetail"></span>
+              <span class="caption" data-i18n="Some videos require a signed-in account. Sign in once in the built-in browser window and close it; the saved cookies are passed to yt-dlp for video downloads. Downloads started from the browser extension already carry the browser's cookies."></span></div>
+            <div class="sub-actions">
+              <button class="btn" id="loginOpen" data-i18n="Sign in to YouTube…"></button>
+              <button class="btn hidden" id="loginSave" data-i18n="Save Cookies"></button>
+              <button class="btn" id="loginClear" data-i18n="Clear"></button>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-title">yt-dlp</div>
+        <div class="card">
+          <div class="item">
+            <div class="grow"><span id="ytdlpName"></span><span class="path selectable" id="ytdlpPath"></span></div>
+            <button class="btn" id="installYtdlp"></button>
+          </div>
+          <div class="item hidden" id="toolProgressRow"><div class="grow"><div class="progress"><div id="toolProgress" style="width:0"></div></div></div></div>
+          <div class="item hidden" id="toolMessageRow"><span class="caption" id="toolMessage"></span></div>
+          <div class="item"><span class="caption" data-i18n="yt-dlp and ffmpeg are bundled with the app. “Update” downloads the latest yt-dlp release from GitHub (checksum verified) into the app's data folder and uses it instead of the bundled copy. Update when YouTube downloads stop working."></span></div>
+          <div class="item">
+            <input type="text" class="wide" id="ytdlpCustom" data-i18n-placeholder="Custom yt-dlp path (empty = bundled)">
+            <button class="btn" id="chooseYtdlp" data-i18n="Choose…"></button>
+          </div>
+          <div class="item">
+            <div class="grow"><span id="denoName"></span><span class="path selectable" id="denoPath"></span>
+              <span class="caption" data-i18n="YouTube requires a JavaScript runtime to unlock video streams. deno is downloaded from its official GitHub releases (checksum verified) into the app's data folder."></span></div>
+            <button class="btn" id="installDeno"></button>
+          </div>
+          <div class="item"><span class="caption selectable" id="ffmpegLine"></span></div>
+        </div>
+
+        <div class="section-title" data-i18n="Default format"></div>
+        <div class="card">
+          <div class="item"><div class="grow" data-i18n="Container"></div>
+            <select data-setting="videoContainer">
+              <option value="mp4" data-i18n="MP4 (H.264/AAC, plays everywhere)"></option>
+              <option value="mkv">MKV</option>
+              <option value="webm">WebM</option>
+              <option value="original" data-i18n="Original (no conversion)"></option>
+            </select></div>
+          <div class="item"><div class="grow"><span data-i18n="Maximum resolution"></span>
+              <span class="caption" data-i18n="Default: MP4 at up to 1080p. Streams are merged with the bundled ffmpeg."></span></div>
+            <select data-setting="videoMaxHeight" data-number>
+              <option value="0" data-i18n="Best available"></option>
+              <option value="2160">2160p (4K)</option>
+              <option value="1440">1440p</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+              <option value="480">480p</option>
+              <option value="360">360p</option>
+              <option value="-1" data-i18n="Audio only (M4A)"></option>
+              <option value="-2" data-i18n="Audio only (MP3)"></option>
+            </select></div>
+          <div class="item"><input type="text" class="wide mono" data-setting="videoFormat" data-i18n-placeholder="Custom yt-dlp -f expression (overrides the pickers)"></div>
+          <div class="item"><span class="caption selectable mono" id="effectiveArgs"></span></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="js/common.js"></script>
+  <script src="js/settings.js"></script>
+</body>
+</html>

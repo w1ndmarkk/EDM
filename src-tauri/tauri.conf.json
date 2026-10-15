@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "EDM",
+  "version": "1.2.0",
+  "identifier": "com.edm.downloadmanager",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "publisher": "EDM",
+    "copyright": "MIT License",
+    "category": "Utility",
+    "shortDescription": "Multi-connection download manager",
+    "longDescription": "Captures Chrome, Edge and Brave downloads, accelerates them with up to 16 parallel connections and downloads videos from web pages.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../Tools/yt-dlp.exe": "tools/yt-dlp.exe",
+      "../Tools/ffmpeg.exe": "tools/ffmpeg.exe",
+      "../Tools/deno.exe": "tools/deno.exe",
+      "../Extension/": "extension/"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "Turkish"],
+        "displayLanguageSelector": false,
+        "installerIcon": "icons/icon.ico"
+      },
+      "wix": {
+        "language": "en-US"
+      }
+    }
+  },
+  "plugins": {}
+}

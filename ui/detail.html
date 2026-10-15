@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EDM</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  body { background: var(--surface); }
+  .view { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; height: 100vh; }
+  .grid { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 18px; font-variant-numeric: tabular-nums; }
+  .grid > .k { color: var(--text-2); }
+  .grid > .v { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grid > .v.failed { color: var(--danger); white-space: normal; }
+  .controls { display: flex; align-items: center; gap: 8px; }
+  .details { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; border-top: 1px solid var(--border); padding-top: 12px; }
+  .details canvas { height: 12px; }
+  .conn-wrap { flex: 1; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  table.conn { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  table.conn th { position: sticky; top: 0; background: var(--surface-2); text-align: left; font-weight: 400; color: var(--text-2); padding: 5px 10px; border-bottom: 1px solid var(--border); }
+  table.conn td { padding: 4px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  pre.log { flex: 1; margin: 0; overflow: auto; padding: 8px 10px; font: 11.5px/1.45 var(--mono); white-space: pre-wrap; word-break: break-all;
+            background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
+  .done-head { display: flex; align-items: center; gap: 14px; }
+  .done-head svg { width: 44px; height: 44px; color: var(--success); stroke-width: 1.4; }
+  .done-head h2 { font-size: 18px; }
+  .actions { display: flex; gap: 8px; margin-top: auto; }
+</style>
+</head>
+<body>
+  <div class="view" id="active">
+    <div class="grid" id="info"></div>
+    <div class="progress"><div id="bar" style="width:0"></div></div>
+    <div class="controls">
+      <button class="btn" id="toggleDetails"></button>
+      <label class="check"><input type="checkbox" id="autoClose"><span data-i18n="Close when completed"></span></label>
+      <div class="spacer"></div>
+      <button class="btn" id="primaryBtn"></button>
+      <button class="btn" id="secondaryBtn"></button>
+    </div>
+    <div class="details" id="details">
+      <div id="fileDetails" class="col" style="flex:1;min-height:0;gap:8px">
+        <div class="caption" style="text-align:center" data-i18n="Start positions and download progress by connections"></div>
+        <canvas class="segbar" id="segbar"></canvas>
+        <div class="conn-wrap">
+          <table class="conn">
+            <thead><tr><th style="width:44px" data-i18n="N."></th><th style="width:120px" data-i18n="Downloaded"></th><th style="width:120px" data-i18n="Start"></th><th data-i18n="Info"></th></tr></thead>
+            <tbody id="conns"></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="videoDetails" class="col hidden" style="flex:1;min-height:0">
+        <div class="caption" data-i18n="yt-dlp output"></div>
+        <pre class="log selectable" id="log"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="view hidden" id="completed">
+    <div class="done-head">
+      <span id="doneIcon"></span>
+      <div class="col" style="gap:2px;min-width:0">
+        <h2 data-i18n="Download completed"></h2>
+        <span class="ellipsis" id="doneName"></span>
+      </div>
+    </div>
+    <div class="grid" id="doneInfo"></div>
+    <div class="actions">
+      <button class="btn" id="doneClose" data-i18n="Close"></button>
+      <div class="spacer"></div>
+      <button class="btn" id="doneReveal" data-i18n="Show in Folder"></button>
+      <button class="btn primary" id="doneOpen" data-i18n="Open"></button>
+    </div>
+  </div>
+
+  <div class="view hidden" id="removed"><p class="muted" data-i18n="This download was removed from the list."></p></div>
+
+  <script src="js/common.js"></script>
+  <script src="js/detail.js"></script>
+</body>
+</html>

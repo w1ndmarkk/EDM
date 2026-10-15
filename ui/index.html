@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EDM</title>
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><img src="img/icon.png" alt="" width="22" height="22"><span>EDM</span></div>
+      <nav id="nav"></nav>
+    </aside>
+
+    <section class="content">
+      <header class="toolbar">
+        <button class="btn primary" id="btnAdd" data-i18n-title="Add a download by URL (Ctrl+N)"></button>
+        <button class="btn subtle" id="btnPlaylist" data-i18n-title="Download the videos of a YouTube playlist (Ctrl+L)"></button>
+        <button class="btn subtle queue" id="btnStart" data-i18n-title="Resume paused and failed downloads"></button>
+        <button class="btn subtle queue" id="btnStop" data-i18n-title="Pause all downloads"></button>
+        <button class="btn subtle queue" id="btnClear" data-i18n-title="Remove completed and cancelled items from the list"></button>
+        <div class="spacer"></div>
+        <div class="search"><span class="search-icon"></span><input type="search" id="search" data-i18n-placeholder="Search in the list"></div>
+        <button class="btn subtle icon-only" id="btnSettings" data-i18n-title="Settings"></button>
+      </header>
+
+      <div class="table-wrap" id="tableWrap">
+        <table class="list" id="list">
+          <colgroup>
+            <col class="c-name"><col class="c-size"><col class="c-status"><col class="c-speed"><col class="c-eta"><col class="c-date">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-sort="name" data-i18n="Name">Name</th>
+              <th data-sort="size" data-i18n="Size">Size</th>
+              <th data-sort="status" data-i18n="Status">Status</th>
+              <th data-sort="speed" data-i18n="Speed">Speed</th>
+              <th data-i18n="Time Left">Time Left</th>
+              <th data-sort="date" data-i18n="Date Added">Date Added</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty hidden" id="empty">
+          <div class="empty-icon"></div>
+          <h2 id="emptyTitle"></h2>
+          <p class="muted" id="emptyText"></p>
+        </div>
+      </div>
+
+      <footer class="statusbar">
+        <span class="dot" id="bridgeDot"></span>
+        <span id="bridgeText" class="muted"></span>
+        <div class="spacer"></div>
+        <span class="stat" id="unfinished" data-i18n-title="Unfinished downloads"></span>
+        <span class="stat" id="totalSpeed" data-i18n-title="Total download speed"></span>
+      </footer>
+    </section>
+  </div>
+
+  <div class="ctx-menu hidden" id="menu"></div>
+  <div class="drop-overlay hidden" id="dropOverlay"><div data-i18n="Drop links to download them"></div></div>
+
+  <dialog id="addDialog">
+    <form method="dialog" class="dlg-body" id="addForm" style="width:540px">
+      <h2 data-i18n="New Download"></h2>
+      <p class="muted" data-i18n="One URL per line."></p>
+      <textarea id="addText" rows="6" spellcheck="false"></textarea>
+      <label class="check"><input type="checkbox" id="addVideo"><span data-i18n="Download video from page (yt-dlp)"></span></label>
+      <div class="row" id="addSegmentsRow">
+        <span id="addSegmentsLabel"></span>
+        <div class="spacer"></div>
+        <button type="button" class="btn small" id="segMinus">−</button>
+        <button type="button" class="btn small" id="segPlus">+</button>
+      </div>
+    </form>
+    <div class="dlg-foot">
+      <button class="btn" id="addPaste" data-i18n="Paste from Clipboard"></button>
+      <div class="spacer"></div>
+      <button class="btn" id="addCancel" data-i18n="Cancel"></button>
+      <button class="btn primary" id="addOk" data-i18n="Download"></button>
+    </div>
+  </dialog>
+
+  <dialog id="plDialog">
+    <div class="dlg-body pl-body">
+      <h2 data-i18n="Download Playlist"></h2>
+      <p class="muted" data-i18n="Paste the address of a YouTube playlist (or of a channel's Videos page). The videos are saved in a folder named after the playlist."></p>
+      <form class="row" id="plForm">
+        <input type="text" id="plUrl" spellcheck="false" autocomplete="off" placeholder="https://www.youtube.com/playlist?list=…">
+        <button type="submit" class="btn" id="plFetch" data-i18n="Get List"></button>
+      </form>
+      <div class="pl-status hidden" id="plStatus"></div>
+      <div class="col pl-result hidden" id="plResult">
+        <div class="row pl-head">
+          <label class="check ellipsis"><input type="checkbox" id="plAll"><span class="ellipsis" id="plTitle"></span></label>
+          <div class="spacer"></div>
+          <span class="muted num" id="plCount"></span>
+        </div>
+        <div class="pl-list" id="plList"></div>
+        <div class="row pl-opts">
+          <span data-i18n="Quality"></span>
+          <select id="plQuality"></select>
+          <div class="spacer"></div>
+          <label class="check"><input type="checkbox" id="plNumbered"><span data-i18n="Number files in playlist order"></span></label>
+        </div>
+        <div class="caption ellipsis" id="plDest"></div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <div class="spacer"></div>
+      <button class="btn" id="plCancel" data-i18n="Cancel"></button>
+      <button class="btn primary" id="plOk" disabled></button>
+    </div>
+  </dialog>
+
+  <dialog id="onboarding">
+    <div class="dlg-body" style="width:600px">
+      <div class="row" style="gap:14px">
+        <img src="img/icon.png" alt="" width="56" height="56">
+        <div class="col" style="gap:2px">
+          <h2 data-i18n="Welcome to EDM"></h2>
+          <span class="muted" id="obSubtitle"></span>
+        </div>
+      </div>
+      <div id="obStep0">
+        <p class="muted" style="margin-bottom:12px" data-i18n="Browser downloads and copied links with these extensions are handed to the app. Everything else stays in the browser. You can change this later in Settings ▸ File Types."></p>
+        <div class="card" id="obCapture"></div>
+        <div class="card" style="margin-top:10px">
+          <label class="item"><div class="grow" data-i18n="Watch the clipboard for links and ask to download them"></div>
+            <span class="switch"><input type="checkbox" id="obClipboard"><span></span></span></label>
+        </div>
+      </div>
+      <div id="obStep1" class="hidden">
+        <p class="muted" style="margin-bottom:12px" data-i18n="The extensions let your browsers hand their downloads to EDM and capture videos on pages. A guided setup walks you through each browser, one at a time. You can run it later from Settings ▸ Browser Extensions."></p>
+        <div class="card" id="obBrowsers"></div>
+      </div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn hidden" id="obBack" data-i18n="Back"></button>
+      <div class="spacer"></div>
+      <button class="btn" id="obContinue" data-i18n="Continue"></button>
+      <button class="btn hidden" id="obNotNow" data-i18n="Not Now"></button>
+      <button class="btn primary hidden" id="obSetup" data-i18n="Start Setup"></button>
+    </div>
+  </dialog>
+
+  <script src="js/common.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EDM</title>
+<link rel="stylesheet" href="css/app.css">
+<style>
+  html, body { height: auto; background: var(--surface); }
+  .body { display: flex; gap: 16px; padding: 22px 24px 18px; }
+  .body img { flex: none; }
+  .text { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1; }
+  #title { font-size: 15px; font-weight: 600; }
+  #message { white-space: pre-wrap; color: var(--text-2); }
+  #detail { max-height: 150px; overflow: auto; white-space: pre; }
+  .foot { display: flex; gap: 8px; align-items: center; padding: 14px 24px; background: var(--bg); border-top: 1px solid var(--border); }
+  .foot .btn { min-width: 90px; }
+</style>
+</head>
+<body>
+  <div class="body">
+    <img src="img/icon.png" alt="" width="40" height="40">
+    <div class="text">
+      <div id="title"></div>
+      <div id="message" class="selectable"></div>
+      <div id="detail" class="path-box hidden"></div>
+    </div>
+  </div>
+  <div class="foot">
+    <label class="check hidden" id="checkRow"><input type="checkbox" id="check"><span id="checkText"></span></label>
+    <div class="spacer"></div>
+    <div class="row" id="buttons"></div>
+  </div>
+  <script src="js/common.js"></script>
+  <script src="js/prompt.js"></script>
+</body>
+</html>

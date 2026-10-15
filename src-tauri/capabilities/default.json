@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Local app windows (the site-login window loads remote pages and gets no capability).",
+  "windows": ["main", "settings", "wizard", "detail-*", "prompt-*"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "dialog:allow-open"
+  ]
+}
