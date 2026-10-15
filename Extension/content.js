@@ -213,6 +213,17 @@
     }
     ui.wrap.style.display = 'block';
     place(next.rect);
+    prefetch();
+  }
+
+  // Like IDM: the qualities are read while the user watches, so the menu opens with them. Once per address
+  // (YouTube changes the address without reloading the page).
+  let prefetchedUrl = '';
+  function prefetch() {
+    const url = location.href;
+    if (url === prefetchedUrl || !/^https?:/i.test(url)) return;
+    prefetchedUrl = url;
+    send({ type: 'prefetch', url, referer: url });
   }
 
   /** Above the player's top-right corner (inside it when there is no room above), like IDM. */

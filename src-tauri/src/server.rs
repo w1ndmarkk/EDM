@@ -46,6 +46,8 @@ pub struct Server {
     status: Mutex<ServerStatus>,
     stop: Mutex<Option<CancellationToken>>,
     formats_cache: Mutex<HashMap<String, (std::time::Instant, video::FormatList)>>,
+    /// One yt-dlp run per page at a time (the early read and the click that follows it).
+    formats_inflight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Server {
@@ -57,6 +59,7 @@ impl Server {
             status: Mutex::new(ServerStatus { status_text: t("Not started"), ..Default::default() }),
             stop: Mutex::new(None),
             formats_cache: Mutex::new(HashMap::new()),
+            formats_inflight: Mutex::new(HashMap::new()),
         })
     }
 
@@ -287,15 +290,32 @@ impl Server {
         }
     }
 
-    /// Runs `yt-dlp -J` for the page (results cached for a few minutes, so reopening the panel is instant).
+    /// Runs `yt-dlp -J` for the page. The extension asks as soon as a player shows up, so the list is usually
+    /// ready (cached) when the panel opens; a request arriving while the same page is being read waits for that run.
     async fn formats(&self, body: FormatsBody, settings: &crate::settings::Settings) -> Result<video::FormatList, String> {
-        const TTL: Duration = Duration::from_secs(300);
+        const TTL: Duration = Duration::from_secs(30 * 60);
         let key = format!("{}|{}", body.url, settings.video_container);
-        if let Some((at, list)) = self.formats_cache.lock().unwrap().get(&key) {
-            if at.elapsed() < TTL {
-                return Ok(list.clone());
-            }
+        let cached = || {
+            self.formats_cache.lock().unwrap().get(&key).filter(|(at, _)| at.elapsed() < TTL).map(|(_, list)| list.clone())
+        };
+        if let Some(list) = cached() {
+            return Ok(list);
         }
+        let gate = self.formats_inflight.lock().unwrap().entry(key.clone()).or_default().clone();
+        let _running = gate.lock().await;
+        if let Some(list) = cached() {
+            return Ok(list);
+        }
+        let result = self.read_formats(body, settings).await;
+        self.formats_inflight.lock().unwrap().remove(&key);
+        let list = result?;
+        let mut cache = self.formats_cache.lock().unwrap();
+        cache.retain(|_, (at, _)| at.elapsed() < TTL);
+        cache.insert(key, (std::time::Instant::now(), list.clone()));
+        Ok(list)
+    }
+
+    async fn read_formats(&self, body: FormatsBody, settings: &crate::settings::Settings) -> Result<video::FormatList, String> {
         let exe = video::locate_ytdlp(&settings.ytdlp_path).ok_or_else(|| t("yt-dlp not found"))?;
         let mut headers = BTreeMap::new();
         if let Some(ua) = body.user_agent.filter(|s| !s.is_empty()) {
@@ -317,11 +337,7 @@ impl Server {
         if let Some(cf) = cookie_file {
             let _ = std::fs::remove_file(cf);
         }
-        let list = result?;
-        let mut cache = self.formats_cache.lock().unwrap();
-        cache.retain(|_, (at, _)| at.elapsed() < TTL);
-        cache.insert(key, (std::time::Instant::now(), list.clone()));
-        Ok(list)
+        result
     }
 }
 

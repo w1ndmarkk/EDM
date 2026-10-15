@@ -207,6 +207,22 @@ api.downloads.onDeterminingFilename.addListener((item, suggest) => {
 });
 
 // ---------- Formats for the in-page "Download this video" panel ----------
+// Read as soon as a player appears (like IDM), so the list is ready when the panel is clicked. One request per page;
+// the app keeps its own cache too, for when this worker has been asleep.
+const formatsCache = new Map(); // url -> { time, promise }
+const FORMATS_TTL = 30 * 60 * 1000;
+function cachedFormats(url, referer) {
+  const hit = formatsCache.get(url);
+  if (hit && Date.now() - hit.time < FORMATS_TTL) return hit.promise;
+  const promise = videoFormats(url, referer).then((r) => {
+    if (!r || !r.ok) formatsCache.delete(url); // offline or failed: ask again next time
+    return r;
+  });
+  formatsCache.set(url, { time: Date.now(), promise });
+  while (formatsCache.size > 40) formatsCache.delete(formatsCache.keys().next().value);
+  return promise;
+}
+
 async function videoFormats(url, referer) {
   const ck = await cookiesFor(url);
   try {
@@ -295,10 +311,27 @@ async function addMedia(tabId, info) {
     }
     await writeMedia(tabId, list);
   });
+  // A new stream: read its resolutions and duration right away, so the panel opens with them.
+  if (info.kind === 'hls' && !info.details) scheduleDescribe(tabId);
+}
+
+const describeTimers = new Map();
+function scheduleDescribe(tabId) {
+  clearTimeout(describeTimers.get(tabId));
+  describeTimers.set(tabId, setTimeout(() => { describeTimers.delete(tabId); describeTabMedia(tabId).catch(() => {}); }, 400));
+}
+
+// One reading per tab at a time: a later call waits for the running one, then picks up only what is still missing.
+const describing = new Map(); // tabId -> promise
+function describeTabMedia(tabId) {
+  const next = (describing.get(tabId) || Promise.resolve()).catch(() => {}).then(() => describeTabMediaNow(tabId));
+  describing.set(tabId, next);
+  next.finally(() => { if (describing.get(tabId) === next) describing.delete(tabId); }).catch(() => {});
+  return next;
 }
 
 /** Fills in HLS details (resolutions, duration) for the panel, reading the playlist in the frame that loaded it. */
-async function describeTabMedia(tabId) {
+async function describeTabMediaNow(tabId) {
   const list = await readMedia(tabId);
   const todo = list.filter((m) => m.kind === 'hls' && m.details === undefined).slice(0, 8);
   if (!todo.length) return list;
@@ -463,7 +496,14 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse({ title: (sender.tab && sender.tab.title) || '', items });
           break;
         }
-        case 'formats': sendResponse(await videoFormats(msg.url, msg.referer)); break;
+        case 'formats': sendResponse(await cachedFormats(msg.url, msg.referer)); break;
+        case 'prefetch': {
+          // A player became visible: read its qualities and the captured playlists now, not on click.
+          if (typeof msg.url === 'string' && /^https?:/i.test(msg.url)) cachedFormats(msg.url, msg.referer).catch(() => {});
+          if (sender.tab) describeTabMedia(sender.tab.id).catch(() => {});
+          sendResponse({ ok: true });
+          break;
+        }
         case 'downloads': sendResponse(await getDownloads()); break;
         case 'action': sendResponse(await downloadAction(msg.id, msg.action)); break;
         case 'download': sendResponse(await sendToApp(msg)); break;

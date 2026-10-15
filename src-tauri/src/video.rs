@@ -183,7 +183,10 @@ fn command(executable: &Path, args: &[String]) -> tokio::process::Command {
         path_env.push(p);
     }
     let mut cmd = tokio::process::Command::new(executable);
-    cmd.args(args)
+    // Without it yt-dlp drops characters from the paths it prints (the "？" it puts in place of "?" in Windows file
+    // names), so the printed path would not match the file on disk.
+    cmd.args(["--encoding", "utf-8"])
+        .args(args)
         .env("PATH", path_env)
         .env("PYTHONIOENCODING", "utf-8")
         .env("PYTHONUTF8", "1")
@@ -420,6 +423,9 @@ pub struct RunOptions<'a> {
     pub output_dir: &'a Path,
     /// File name without extension; None = yt-dlp's "<title> [<id>]".
     pub output_name: Option<&'a str>,
+    /// Folder for everything unfinished (.part files, fragments, streams waiting to be merged); yt-dlp moves the
+    /// finished file to `output_dir`. Deleting it removes all of a download's partial data.
+    pub temp_dir: &'a Path,
     pub format_args: Vec<String>,
     pub headers: &'a BTreeMap<String, String>,
     pub cookie_file: Option<&'a str>,
@@ -434,8 +440,8 @@ pub fn run(
 ) -> Result<u32, String> {
     // A stream URL (HLS/DASH) has no title of its own: name the file after the page instead.
     let template = match opts.output_name {
-        Some(name) => opts.output_dir.join(format!("{}.%(ext)s", name.replace('%', "%%"))),
-        None => opts.output_dir.join("%(title).150B [%(id)s].%(ext)s"),
+        Some(name) => format!("{}.%(ext)s", name.replace('%', "%%")),
+        None => "%(title).150B [%(id)s].%(ext)s".to_string(),
     };
     let mut args: Vec<String> = [
         "--newline", "--no-playlist", "--no-colors", "--progress", "--no-simulate", "--no-mtime", "--no-quiet", "-N", "4",
@@ -444,8 +450,12 @@ pub fn run(
     .map(|s| s.to_string())
     .collect();
     args.extend([
+        "-P".into(),
+        format!("home:{}", opts.output_dir.to_string_lossy()),
+        "-P".into(),
+        format!("temp:{}", opts.temp_dir.to_string_lossy()),
         "-o".into(),
-        template.to_string_lossy().into_owned(),
+        template,
         "--progress-template".into(),
         "download:DMP|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.total_bytes_estimate)s|%(progress.speed)s".into(),
         "--print".into(),

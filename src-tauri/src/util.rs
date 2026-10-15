@@ -41,6 +41,19 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
     c
 }
 
+/// Gives a file or folder the Hidden attribute (download temp folders next to the user's files).
+pub fn hide(path: &std::path::Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileAttributesW, SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN, INVALID_FILE_ATTRIBUTES};
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    unsafe {
+        let attrs = GetFileAttributesW(wide.as_ptr());
+        if attrs != INVALID_FILE_ATTRIBUTES {
+            SetFileAttributesW(wide.as_ptr(), attrs | FILE_ATTRIBUTE_HIDDEN);
+        }
+    }
+}
+
 /// Kills a process and its children (yt-dlp spawns ffmpeg).
 pub fn kill_tree(pid: u32) {
     let _ = command("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"]).output();

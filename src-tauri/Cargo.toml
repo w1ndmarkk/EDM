@@ -1,6 +1,6 @@
 [package]
 name = "edm"
-version = "1.2.1"
+version = "1.2.2"
 description = "Fast, open-source multi-connection download manager for Windows"
 authors = ["EDM contributors"]
 license = "MIT"
@@ -38,6 +38,7 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_Ioctl",
+    "Win32_Storage_FileSystem",
 ] }
 
 [profile.release]

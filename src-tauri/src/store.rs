@@ -524,6 +524,19 @@ impl Store {
         }
         let out_dir = Self::destination_dir(&settings, &item);
         let _ = std::fs::create_dir_all(&out_dir);
+        // All partial data in one hidden folder per download: cancel, remove and the 24-hour cleanup delete it
+        // whatever yt-dlp named the files. The same folder on resume, so yt-dlp continues its .part files.
+        let temp_dir = out_dir.join(format!(".edm-{id}"));
+        if std::fs::create_dir_all(&temp_dir).is_ok() {
+            util::hide(&temp_dir);
+        }
+        {
+            let tp = temp_dir.to_string_lossy().into_owned();
+            let it = &mut inner.items[idx];
+            if !it.temp_paths.contains(&tp) {
+                it.temp_paths.push(tp);
+            }
+        }
         let generation = inner.next_generation();
         inner.tasks.insert(id, Task { generation, cancel: None, pid: None });
         inner.video_phase.insert(id, VideoPhase { approx_total: -1, ..Default::default() });
@@ -542,6 +555,7 @@ impl Store {
                     url: &item.url,
                     output_dir: &out_dir,
                     output_name: item.output_title.as_deref(),
+                    temp_dir: &temp_dir,
                     format_args,
                     headers: &item.headers,
                     cookie_file: item.cookie_file.as_deref(),
@@ -665,8 +679,11 @@ impl Store {
                     item.state = DownloadState::Completed;
                     item.completed_at = Some(util::now_ms());
                     item.speed = 0.0;
-                    // yt-dlp removed its intermediate files itself.
-                    item.temp_paths.clear();
+                    // yt-dlp removed its intermediate files itself; only the (empty) temp folder is left.
+                    let dirs: Vec<PathBuf> = item.temp_paths.drain(..).map(PathBuf::from).filter(|p| {
+                        p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".edm-"))
+                    }).collect();
+                    tauri::async_runtime::spawn(delete_files(dirs));
                     if let Some(path) = path {
                         let p = PathBuf::from(&path);
                         apply_mark_of_the_web(&p, &item.url);
@@ -1139,6 +1156,11 @@ fn completed_paths(items: &[DownloadItem]) -> HashSet<PathBuf> {
 fn leftover_files(item: &DownloadItem, keep: &HashSet<PathBuf>) -> Vec<PathBuf> {
     let mut out = vec![item.part_path()];
     for announced in item.temp_paths.iter().map(PathBuf::from) {
+        // The download's own temporary folder (yt-dlp `-P temp:`): everything in it goes.
+        if announced.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".edm-")) {
+            out.push(announced);
+            continue;
+        }
         if !keep.contains(&announced) {
             out.push(announced.clone());
         }
@@ -1158,11 +1180,12 @@ fn leftover_files(item: &DownloadItem, keep: &HashSet<PathBuf>) -> Vec<PathBuf> 
     out
 }
 
-/// Deletes files, retrying briefly while a just-killed process still holds them.
+/// Deletes files (and download temp folders), retrying briefly while a just-killed process still holds them.
 async fn delete_files(files: Vec<PathBuf>) {
     let mut pending: Vec<PathBuf> = files.into_iter().filter(|p| p.exists()).collect();
+    let remove = |p: &PathBuf| if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) };
     for _ in 0..8 {
-        pending.retain(|p| std::fs::remove_file(p).is_err() && p.exists());
+        pending.retain(|p| remove(p).is_err() && p.exists());
         if pending.is_empty() {
             break;
         }
@@ -1338,6 +1361,26 @@ mod tests {
         let expected: HashSet<String> = ["Clip [a1].f137.mp4.part", "Clip [a1].f137.mp4.part-Frag3", "Clip [a1].f137.mp4.ytdl", "Clip [a1].f140.m4a", "Clip [a1].temp.mp4"]
             .iter().map(|s| s.to_string()).collect();
         assert_eq!(names, expected);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn temp_folder_of_a_paused_video_is_removed() {
+        let dir = std::env::temp_dir().join(format!("edm-test-{}", Uuid::new_v4()));
+        let tmp = dir.join(format!(".edm-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // yt-dlp's real names can differ from what it printed ("？" for "?"): the whole folder goes regardless.
+        std::fs::write(tmp.join("Why？ [x].f133.mp4"), b"x").unwrap();
+        std::fs::write(tmp.join("Why？ [x].f140.m4a.part"), b"x").unwrap();
+        std::fs::write(dir.join("Finished.mp4"), b"x").unwrap();
+        let item = DownloadItem {
+            directory: dir.clone(),
+            temp_paths: vec![tmp.to_string_lossy().into(), dir.join("Why [x].f133.mp4").to_string_lossy().into()],
+            ..Default::default()
+        };
+        delete_files(leftover_files(&item, &HashSet::new())).await;
+        assert!(!tmp.exists());
+        assert!(dir.join("Finished.mp4").exists());
         let _ = std::fs::remove_dir_all(dir);
     }
 
