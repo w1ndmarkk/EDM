@@ -231,7 +231,8 @@ async function videoFormats(url, referer) {
       body: JSON.stringify({ url, referer: referer || url, userAgent: navigator.userAgent, cookies: ck.list }),
     });
   } catch (e) {
-    return { ok: false, offline: true, error: String(e) };
+    // "Not running" only when the app really does not answer; otherwise the request itself failed.
+    return { ok: false, offline: !(await ping()), error: String(e) };
   }
 }
 
@@ -313,6 +314,17 @@ async function addMedia(tabId, info) {
   });
   // A new stream: read its resolutions and duration right away, so the panel opens with them.
   if (info.kind === 'hls' && !info.details) scheduleDescribe(tabId);
+  // Audio without a visible player gets a panel docked at the bottom of the page.
+  if ((info.kind === 'media' && isAudio(info)) || (info.kind === 'hls' && isAudioOnlyHls(info.details))) announceAudio(tabId);
+}
+
+const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|weba|wma)(\?|#|$)/i;
+const isAudio = (m) => /^audio\//i.test(m.type || '') || (!/^video\//i.test(m.type || '') && AUDIO_EXT.test(m.url));
+/** An HLS stream with only audio renditions (no resolution, no video codec). */
+const isAudioOnlyHls = (d) => !!(d && d.variants && d.variants.length
+  && d.variants.every((v) => !v.height && !/avc|hvc|hev|vp0?8|vp0?9|av01/i.test(v.codecs || '')));
+function announceAudio(tabId) {
+  try { api.tabs.sendMessage(tabId, { type: 'audioCaptured' }, { frameId: 0 }).catch(() => {}); } catch {}
 }
 
 const describeTimers = new Map();
@@ -345,6 +357,7 @@ async function describeTabMediaNow(tabId) {
   return withTab(tabId, async () => {
     const current = await readMedia(tabId);
     for (const [key, d] of found) { const m = current.find((x) => x.key === key); if (m) m.details = d; }
+    if (found.some(([, d]) => isAudioOnlyHls(d))) announceAudio(tabId);
     if (api.storage.session) await api.storage.session.set({ ['media:' + tabId]: current });
     else mem.set(tabId, new Map(current.map((m) => [m.url, m])));
     return current;
@@ -429,6 +442,8 @@ if (api.webRequest?.onHeadersReceived) {
       let size = parseInt(headerVal(d.responseHeaders, 'content-length'), 10) || 0;
       const cr = headerVal(d.responseHeaders, 'content-range').match(/\/(\d+)/);
       if (cr) size = parseInt(cr[1], 10);
+      // Internet radio (Icecast/SHOUTcast) never ends: not a file to download.
+      if (headerVal(d.responseHeaders, 'icy-name') || headerVal(d.responseHeaders, 'icy-br') || headerVal(d.responseHeaders, 'icy-metaint')) return;
       const kind = classify(d.url, ct, size);
       if (!kind) {
         const base = ct.split(';')[0].trim().toLowerCase();

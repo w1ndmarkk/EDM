@@ -192,5 +192,11 @@
   },
   "menuPlaylist": {
     "message": "Oynatma listesini EDM ile indir"
+  },
+  "panelPageAudio": {
+    "message": "Bu sayfadaki sesi indir"
+  },
+  "panelFormatsFailed": {
+    "message": "Kaliteler okunamadı: $1"
   }
 }

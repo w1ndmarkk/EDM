@@ -45,9 +45,12 @@
 
   // ---------- Media URLs on the page ----------
   const reported = new Set();
+  let shadowMedia = [];   // media elements inside shadow roots (see mediaElements)
+  let shadowScanAt = 0;
   function scanMedia() {
     const items = [];
-    document.querySelectorAll('video, audio, source, track').forEach((el) => {
+    const inShadow = shadowMedia.flatMap((m) => [m, ...m.querySelectorAll('source, track')]);
+    [...document.querySelectorAll('video, audio, source, track'), ...inShadow].forEach((el) => {
       const src = el.currentSrc || el.src || el.getAttribute('src');
       if (!src || !/^https?:/i.test(src) || reported.has(src)) return;
       reported.add(src);
@@ -98,6 +101,8 @@
             background: #2b2b2b; color: #f2f2f2; border: 1px solid #454545; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.45); }
     .menu.open { display: block; }
     .menu.left { right: auto; left: 0; }
+    /* Opens upwards from the panel docked at the bottom of the page. */
+    .menu.up { top: auto; bottom: calc(100% + 3px); }
     .row { display: flex; width: 100%; align-items: baseline; gap: 14px; padding: 7px 14px; color: #f2f2f2; font-size: 13px; font-weight: 400; }
     .row:hover { background: #3d3d3d; }
     .row .name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -141,7 +146,8 @@
     main.addEventListener('click', () => (menuOpen ? closeMenu() : openMenu()));
     help.addEventListener('click', () => { openMenu(true); });
     close.addEventListener('click', () => {
-      if (target) dismissed.add(target.el);
+      if (target && target.docked) dockDismissed = true;
+      else if (target) dismissed.add(target.el);
       closeMenu();
       hidePanel();
     });
@@ -159,9 +165,9 @@
    * The box the user sees: players often position the <video> oddly (YouTube moves it off-screen until playback),
    * so the enclosing player container wins when there is one.
    */
-  function playerRect(media) {
+  function playerRect(media, isAudio) {
     const own = media.getBoundingClientRect();
-    if (media.tagName === 'AUDIO') return own;
+    if (isAudio) return own;
     const box = media.closest('.html5-video-player, .video-js, .jwplayer, .plyr, [class*="player" i], [id*="player" i]');
     if (box && box !== document.body) {
       const r = box.getBoundingClientRect();
@@ -171,8 +177,8 @@
   }
 
   function visibleRect(media) {
-    const r = playerRect(media);
-    const isAudio = media.tagName === 'AUDIO';
+    const isAudio = looksAudio(media);
+    const r = playerRect(media, isAudio);
     const [minW, minH] = isAudio ? [200, 28] : [200, 110];
     if (r.width < minW || r.height < minH) return null;
     if (r.bottom < 0 || r.right < 0 || r.top > innerHeight || r.left > innerWidth) return null;
@@ -181,40 +187,103 @@
     return r;
   }
 
+  // YouTube plays previews when the pointer rests on a thumbnail (home page, search, channels): those are not the
+  // video the user is watching, and the page address is not a video either.
+  const YT_VIDEO_PAGE = /^\/(watch$|shorts\/|live\/|embed\/)/;
+  const YT_PREVIEW = '#inline-preview-player, ytd-video-preview, ytd-thumbnail, #video-preview, ytd-rich-item-renderer';
+  const skipOnYouTube = (media) => isYouTube && (!YT_VIDEO_PAGE.test(location.pathname) || !!media.closest(YT_PREVIEW));
+
+  // Audio the page plays without a visible player (a hidden <audio>, custom controls, or a file the network layer
+  // caught): like IDM, a "Download audio from this page" panel docked at the bottom of the page (top frame only).
+  let audioOnPage = false;
+  let dockDismissed = false;
+  const isTop = window === window.top;
+
+  // Players are often built from web components (archive.org, many podcast players): their media elements sit in
+  // shadow roots that document.querySelectorAll does not reach. Those are looked up every 2 seconds.
+  function mediaElements() {
+    if (Date.now() - shadowScanAt > 2000) {
+      shadowScanAt = Date.now();
+      const found = [];
+      const walk = (root) => {
+        for (const e of root.querySelectorAll('*')) {
+          if (e.shadowRoot) { found.push(...e.shadowRoot.querySelectorAll('video, audio')); walk(e.shadowRoot); }
+        }
+      };
+      try { walk(document); } catch { /* keep the last result */ }
+      shadowMedia = found;
+    }
+    return [...document.querySelectorAll('video, audio'), ...shadowMedia.filter((m) => m.isConnected)];
+  }
+
+  // Sound played through a <video> element (archive.org does this) counts as audio.
+  const AUDIO_SRC = /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|weba|wma)(\?|#|$)/i;
+  const sourceOf = (m) => m.currentSrc || m.src || (m.querySelector('source') || {}).src || '';
+  const looksAudio = (m) => m.tagName === 'AUDIO' || AUDIO_SRC.test(sourceOf(m)) || (m.readyState >= 1 && !m.videoWidth && !m.videoHeight);
+
   /** The player under the pointer, else the largest visible one. */
   function pickTarget() {
     let best = null;
-    for (const media of document.querySelectorAll('video, audio')) {
-      if (dismissed.has(media)) continue;
-      // A video player may not have loaded its stream yet (no autoplay); an <audio> without a source is a placeholder.
-      if (media.tagName === 'AUDIO' && !(media.currentSrc || media.src || media.querySelector('source'))) continue;
+    for (const media of mediaElements()) {
+      if (dismissed.has(media) || skipOnYouTube(media)) continue;
+      const isAudio = looksAudio(media);
+      // A video player may not have loaded its stream yet (no autoplay); audio without a source is a placeholder.
+      if (isAudio && !sourceOf(media)) continue;
+      // A recording (30 s or longer, one being played, or one with visible controls), not a notification sound
+      // or endless live radio.
+      if (isAudio && media.duration !== Infinity) {
+        const d = media.duration, box = media.getBoundingClientRect();
+        if (d >= 30 || (!media.paused && !(d < 30)) || (Number.isNaN(d) && box.width >= 150 && box.height >= 20)) audioOnPage = true;
+      }
       const r = visibleRect(media);
       if (!r) continue;
       const hovered = pointer.x >= r.left && pointer.x <= r.right && pointer.y >= r.top && pointer.y <= r.bottom;
       const score = (hovered ? 1e9 : 0) + r.width * r.height;
-      if (!best || score > best.score) best = { el: media, rect: r, isAudio: media.tagName === 'AUDIO', score };
+      if (!best || score > best.score) best = { el: media, rect: r, isAudio, score };
     }
     return best;
   }
 
   function update() {
     if (!enabled || document.fullscreenElement) { if (ui && !menuOpen) hidePanel(); return; }
-    if (menuOpen && target && document.contains(target.el)) {
+    if (menuOpen && target && target.el && document.contains(target.el)) {
       const r = visibleRect(target.el);
       if (r) { place(r); return; }
     }
     const next = pickTarget();
-    if (!next) { if (ui) hidePanel(); return; }
+    if (!next) {
+      if (isTop && audioOnPage && !dockDismissed && !isYouTube) { showDocked(); return; }
+      if (ui) hidePanel();
+      return;
+    }
     if (!ui) buildPanel();
     if (!target || target.el !== next.el) {
       closeMenu();
-      target = { el: next.el, isAudio: next.isAudio };
-      ui.label.textContent = next.isAudio ? t('panelAudio') : t('panelVideo');
+      target = { el: next.el, isAudio: next.isAudio, label: next.isAudio ? t('panelAudio') : t('panelVideo') };
+      ui.label.textContent = target.label;
     }
     ui.wrap.style.display = 'block';
     place(next.rect);
     prefetch();
   }
+
+  function showDocked() {
+    if (!ui) buildPanel();
+    if (!target || !target.docked) {
+      closeMenu();
+      target = { el: null, isAudio: true, docked: true, label: t('panelPageAudio') };
+      ui.label.textContent = target.label;
+    }
+    ui.wrap.style.display = 'block';
+    const h = ui.wrap.firstChild.offsetHeight || 26;
+    ui.wrap.style.left = '8px';
+    ui.wrap.style.top = Math.round(innerHeight - h - 8) + 'px';
+    prefetch();
+  }
+
+  api.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === 'audioCaptured' && isTop) { audioOnPage = true; update(); }
+  });
 
   // Like IDM: the qualities are read while the user watches, so the menu opens with them. Once per address
   // (YouTube changes the address without reloading the page).
@@ -348,7 +417,7 @@
 
   function flash(ok) {
     if (!ui) return;
-    const old = target && target.isAudio ? t('panelAudio') : t('panelVideo');
+    const old = target ? target.label : t('panelVideo');
     ui.label.textContent = ok ? t('panelSent') : t('panelOffline');
     ui.wrap.classList.add('flash');
     setTimeout(() => { if (ui) { ui.label.textContent = old; ui.wrap.classList.remove('flash'); } }, 2500);
@@ -373,7 +442,10 @@
     m.textContent = '';
     m.classList.add('open');
     // Open towards the side with room.
-    m.classList.toggle('left', ui.wrap.getBoundingClientRect().right < Math.min(560, innerWidth - 16));
+    const at = ui.wrap.getBoundingClientRect();
+    m.classList.toggle('left', at.right < Math.min(560, innerWidth - 16));
+    m.classList.toggle('up', at.top > innerHeight / 2);
+    m.style.maxHeight = Math.max(160, Math.min(380, (at.top > innerHeight / 2 ? at.top : innerHeight - at.bottom) - 12)) + 'px';
     if (withHelp) { m.append(el('div', 'help', t('panelHelp'))); addSep(); }
 
     const loading = addInfo('');
@@ -385,7 +457,7 @@
     const media = (await send({ type: 'tabMedia' })) || { items: [] };
     if (token !== menuToken) return;
     const title = cleanTitle(media.title || document.title) || nameOf(pageUrl);
-    const direct = target.el.currentSrc || target.el.src || '';
+    const direct = target.el ? target.el.currentSrc || target.el.src || '' : '';
     const items = (media.items || []).slice();
     if (/^https?:/i.test(direct) && !items.some((i) => i.url === direct)) {
       items.push({ url: direct, kind: 'media', type: '', size: 0, key: direct, time: 0 });
@@ -439,6 +511,8 @@
       shown = renderEntries(entries, shown);
     } else if (formats && formats.offline) {
       addInfo(t('panelOffline'), 'error');
+    } else if (isYouTube && formats && !formats.ok) {
+      addInfo(t('panelFormatsFailed', [String(formats.error || '').slice(0, 200)]), 'error');
     }
     if (!shown) addInfo(t('panelNothing'));
   }

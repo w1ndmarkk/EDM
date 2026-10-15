@@ -192,5 +192,11 @@
   },
   "menuPlaylist": {
     "message": "Download playlist with EDM"
+  },
+  "panelPageAudio": {
+    "message": "Download audio from this page"
+  },
+  "panelFormatsFailed": {
+    "message": "Could not read the qualities: $1"
   }
 }

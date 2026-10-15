@@ -109,9 +109,7 @@ impl Server {
                     accepted = listener.accept() => {
                         if let Ok((stream, _)) = accepted {
                             let me = me.clone();
-                            tokio::spawn(async move {
-                                let _ = tokio::time::timeout(Duration::from_secs(15), me.serve(stream, port)).await;
-                            });
+                            tokio::spawn(async move { me.serve(stream, port).await });
                         }
                     }
                 }
@@ -123,23 +121,28 @@ impl Server {
         });
     }
 
+    /// 15 s to send the request; the answer may take longer (yt-dlp reading a slow page for /formats can take
+    /// a minute or more, and cutting it off made the extension report "EDM is not running").
     async fn serve(&self, mut stream: TcpStream, port: u16) {
-        let mut buf = Vec::with_capacity(4096);
-        let mut chunk = [0u8; 65536];
-        let req = loop {
-            match stream.read(&mut chunk).await {
-                Ok(0) | Err(_) => return,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            }
-            if let Some(r) = parse(&buf) {
-                break r;
-            }
-            if buf.len() > MAX_REQUEST {
-                return;
+        let read = async {
+            let mut buf = Vec::with_capacity(4096);
+            let mut chunk = [0u8; 65536];
+            loop {
+                match stream.read(&mut chunk).await {
+                    Ok(0) | Err(_) => return None,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                }
+                if let Some(r) = parse(&buf) {
+                    return Some(r);
+                }
+                if buf.len() > MAX_REQUEST {
+                    return None;
+                }
             }
         };
+        let Ok(Some(req)) = tokio::time::timeout(Duration::from_secs(15), read).await else { return };
         let origin = req.headers.get("origin").cloned();
-        let (status, body) = self.handle(&req, port).await;
+        let Ok((status, body)) = tokio::time::timeout(Duration::from_secs(240), self.handle(&req, port)).await else { return };
         let _ = send(&mut stream, status, &body, origin.as_deref()).await;
     }
 
