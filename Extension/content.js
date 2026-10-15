@@ -81,7 +81,10 @@
     * { box-sizing: border-box; font-family: "Segoe UI", system-ui, sans-serif; }
     .wrap { position: fixed; z-index: 2147483647; display: none; }
     .bar { display: flex; align-items: stretch; gap: 2px; padding: 2px; border-radius: 5px;
-           background: linear-gradient(#f3f8fe, #c9dcf3); border: 1px solid #7f9db9; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+           background: linear-gradient(#f3f8fe, #c9dcf3); border: 1px solid #7f9db9; box-shadow: 0 1px 4px rgba(0,0,0,.35);
+           opacity: .4; transition: opacity .15s ease; }
+    /* See-through over the video until the pointer is on it (or its menu is open, or it reports a result). */
+    .wrap:hover .bar, .wrap:has(.menu.open) .bar, .wrap.flash .bar { opacity: 1; }
     button { all: unset; box-sizing: border-box; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; color: #1a3a6b;
              font-size: 12px; font-weight: 600; line-height: 1; border-radius: 3px; }
     .main { gap: 6px; padding: 4px 9px; border: 1px solid #8eb0d8; background: linear-gradient(#ffffff, #dbe8f8); color: #d4380d; }
@@ -336,7 +339,8 @@
     if (!ui) return;
     const old = target && target.isAudio ? t('panelAudio') : t('panelVideo');
     ui.label.textContent = ok ? t('panelSent') : t('panelOffline');
-    setTimeout(() => { if (ui) ui.label.textContent = old; }, 2500);
+    ui.wrap.classList.add('flash');
+    setTimeout(() => { if (ui) { ui.label.textContent = old; ui.wrap.classList.remove('flash'); } }, 2500);
   }
 
   /** Renders the entries, numbered; "Download all" takes the best resolution of each stream plus every file. */
