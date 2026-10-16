@@ -615,7 +615,7 @@ async function openOnboarding() {
   if (browsers.length) {
     for (const b of browsers) list.append(el('div', { class: 'item' }, el('span', { html: icon('globe') }), el('span', { text: b.name })));
   } else {
-    list.append(el('div', { class: 'item muted', text: t('No supported browser was found (Chrome, Edge, Brave).') }));
+    list.append(el('div', { class: 'item muted', text: t('No supported browser was found (Chrome, Edge, Brave, Firefox).') }));
   }
 
   const show = () => {

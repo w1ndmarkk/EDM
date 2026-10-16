@@ -8,13 +8,14 @@
 
 - Up to 16 connections per file, pause and resume
 - IDM-style categories (Compressed, Documents, Music, Programs, Video) and file-type capture rules
-- Extension for Chrome, Edge and Brave: takes over browser downloads and adds a "Download this video" panel (HLS, DASH, subtitles)
+- Extension for Chrome, Edge, Brave and Firefox: takes over browser downloads and adds a "Download this video" panel (HLS, DASH, audio, subtitles)
 - YouTube videos and playlists via yt-dlp (yt-dlp, ffmpeg and deno are bundled)
 - English and Turkish interface
 
 ## Install
 
 Download the installer (`EDM_x.y.z_x64-setup.exe` or `.msi`) from [Releases](../../releases), then follow the extension setup in the app.
+In Firefox the extension is loaded as a temporary add-on until a signed build is published on addons.mozilla.org.
 
 ## Build
 

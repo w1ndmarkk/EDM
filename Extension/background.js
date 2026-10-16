@@ -1,13 +1,15 @@
-// EDM bridge extension — background script (Chrome, Edge, Brave; MV3)
+// EDM bridge extension — background script (Chrome, Edge, Brave: service worker; Firefox: background script; MV3)
 'use strict';
 
-importScripts('hls.js');
+// Firefox loads hls.js and rules.js itself (manifest "background.scripts"); a Chrome service worker imports them.
+if (typeof importScripts === 'function') importScripts('hls.js', 'rules.js');
 
 const api = typeof browser !== 'undefined' ? browser : chrome;
 const t = (k, subs) => { try { return api.i18n.getMessage(k, subs) || k; } catch { return k; } };
 
 const DEFAULTS = { port: 48213, intercept: true, minSizeMB: 0, sniff: true, panel: true };
-const BROWSER = navigator.brave ? 'brave' : (/Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome');
+const BROWSER = /Firefox\//.test(navigator.userAgent) ? 'firefox'
+  : navigator.brave ? 'brave' : (/Edg\//.test(navigator.userAgent) ? 'edge' : 'chrome');
 
 const MEDIA_EXT = /\.(mp4|m4v|webm|mkv|mov|avi|flv|mp3|m4a|aac|ogg|opus|wav|flac)(\?|#|$)/i;
 const FRAGMENT = /\.(ts|m4s|m4f|cmfv|cmfa|fmp4|init)(\?|#|$)|[/_.-](seg|segment|chunk|frag|fragment)[-_]?\d+/i;
@@ -39,6 +41,7 @@ async function ping(settings) {
     if (!r.ok) return null;
     const app = await r.json();
     if (app && app.active > 0) startProgress();
+    refreshRules().catch(() => {});
     return app;
   } catch {
     return null;
@@ -132,6 +135,9 @@ function notify(title, message) {
   } catch {}
 }
 
+// When the app last failed to answer: downloads the browser has started are left to it for a while.
+let lastAppFailure = 0;
+
 // No notification when a download starts: the app's download window is the confirmation. Only a failure to reach
 // the app is reported, and not for the in-page panel, which says so itself.
 async function sendToApp({ url, filename, referer, kind, format, audio, title, manifest, quiet }) {
@@ -150,9 +156,11 @@ async function sendToApp({ url, filename, referer, kind, format, audio, title, m
     });
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'app error');
+    lastAppFailure = 0;
     startProgress();
     return { ok: true };
   } catch (e) {
+    lastAppFailure = Date.now();
     if (!quiet) notify(t('notifOfflineTitle'), t('notifOfflineBody'));
     return { ok: false, error: String(e) };
   }
@@ -185,26 +193,141 @@ async function shouldCapture(url, filename) {
   }
 }
 
-async function interceptDownload(item) {
+// The rules themselves, kept here so a decision needs no round trip: the browser keeps downloading while it waits
+// for one, and on a metered connection every byte counts. Refreshed from the app at most once a minute.
+let rulesCache = null; // { rules, time }
+async function loadRules() {
+  if (!rulesCache) {
+    try { rulesCache = (await api.storage.local.get('captureRules')).captureRules || null; } catch {}
+  }
+  return rulesCache;
+}
+async function refreshRules(force) {
+  const cur = await loadRules();
+  if (!force && cur && Date.now() - cur.time < 60 * 1000) return cur;
+  try {
+    const j = await bridgeJSON('/rules'); // older apps answer "not found": decisions then go through /check
+    if (j && j.ok && j.rules) {
+      rulesCache = { rules: j.rules, time: Date.now() };
+      await api.storage.local.set({ captureRules: rulesCache });
+    }
+  } catch { /* the app is not running: keep the last rules */ }
+  return rulesCache;
+}
+async function decide(url, filename) {
+  const cache = await loadRules();
+  return cache ? EDM_RULES.capture(cache.rules, url, filename) : shouldCapture(url, filename);
+}
+const tooSmall = (settings, bytes) => settings.minSizeMB > 0 && bytes > 0 && bytes < settings.minSizeMB * 1024 * 1024;
+
+/** The app takes the download; when it is not running, the browser downloads the file after all. */
+async function handOver(url, filename, referer) {
+  const r = await sendToApp({ url, filename, referer, kind: 'file', quiet: true });
+  if (!r.ok) {
+    try { await api.downloads.download({ url, saveAs: false }); } catch {}
+  }
+  return r.ok;
+}
+
+// 1) A click on a download link (content.js): taken before the browser sends the request at all. A HEAD request
+//    (headers only) tells a file from a page with a file-like address, such as GitHub's ".../blob/x.zip" view.
+async function takeLink(msg) {
   const settings = await getSettings();
-  if (!settings.intercept) return false;
+  if (!settings.intercept) return { navigate: true };
+  let head = null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    head = await fetch(msg.url, { method: 'HEAD', credentials: 'include', cache: 'no-store', signal: ctrl.signal });
+    clearTimeout(timer);
+  } catch { /* no answer to HEAD: trust the address */ }
+  if (head && head.ok) {
+    const ct = head.headers.get('content-type') || '';
+    const cd = head.headers.get('content-disposition') || '';
+    if (!/^\s*attachment/i.test(cd) && /text\/html|application\/xhtml/i.test(ct)) return { navigate: true };
+    if (tooSmall(settings, Number(head.headers.get('content-length') || 0))) return { navigate: true };
+  }
+  await handOver(msg.url, msg.filename || '', msg.referer);
+  return { taken: true };
+}
+
+// 2) Firefox: every other download (scripts, redirects, typed addresses) is stopped at its response headers,
+//    before the body arrives. Firefox still allows blocking webRequest; Chrome does not.
+async function takeResponse(d) {
+  if (d.tabId < 0 || d.method !== 'GET' || d.statusCode < 200 || d.statusCode >= 300 || !/^https?:/i.test(d.url)) return {};
+  const cd = headerVal(d.responseHeaders, 'content-disposition');
+  const ct = headerVal(d.responseHeaders, 'content-type');
+  const filename = EDM_RULES.dispositionName(cd);
+  const ext = EDM_RULES.extension(filename) || EDM_RULES.urlExtension(d.url);
+  // Only what the browser would download: an attachment, or a type it cannot show.
+  const shown = ct ? EDM_RULES.shownType(ct) : EDM_RULES.shownExtension(ext);
+  if (!/^\s*attachment/i.test(cd) && shown) return {};
+  const settings = await getSettings();
+  if (!settings.intercept || tooSmall(settings, parseInt(headerVal(d.responseHeaders, 'content-length'), 10) || 0)) return {};
+  if (Date.now() - lastAppFailure < 15 * 1000) return {}; // EDM did not answer a moment ago: the browser keeps it
+  if (!(await decide(d.url, filename))) return {};
+  // Stop the response right away, hand it over afterwards: every millisecond spent waiting lets data through.
+  handOver(d.url, filename, d.originUrl || d.documentUrl || '').catch(() => {});
+  return { cancel: true };
+}
+// 2a) Firefox: a page navigating to a file address (a script setting location, a redirect, a typed address) is
+//     stopped before the request is sent, then checked like a link click. A page after all is loaded again.
+const passThrough = new Set(); // addresses a HEAD request showed to be pages
+async function takeRequest(d) {
+  if (d.tabId < 0 || d.method !== 'GET' || !/^https?:/i.test(d.url)) return {};
+  if (passThrough.delete(d.url)) return {};
+  const ext = EDM_RULES.urlExtension(d.url);
+  if (!ext || EDM_RULES.shownExtension(ext)) return {};
+  const settings = await getSettings();
+  if (!settings.intercept || Date.now() - lastAppFailure < 15 * 1000) return {};
+  const cache = await loadRules();
+  if (!cache || !EDM_RULES.capture(cache.rules, d.url, '')) return {};
+  takeLink({ url: d.url, filename: '', referer: d.originUrl || d.documentUrl || '' }).then((r) => {
+    if (r && r.navigate) {
+      passThrough.add(d.url);
+      api.tabs.update(d.tabId, { url: d.url }).catch(() => {});
+    }
+  }, () => {});
+  return { cancel: true };
+}
+if (BROWSER === 'firefox') {
+  try {
+    api.webRequest.onBeforeRequest.addListener(takeRequest, { urls: ['<all_urls>'], types: ['main_frame'] }, ['blocking']);
+    api.webRequest.onHeadersReceived.addListener(takeResponse, { urls: ['<all_urls>'], types: ['main_frame', 'sub_frame'] }, ['blocking', 'responseHeaders']);
+  } catch { /* no webRequestBlocking: the downloads hooks below remain */ }
+}
+
+// 3) Downloads the browser started anyway (Chrome/Edge/Brave: script-started ones; Firefox: whatever 2 let through).
+//    The browser is already receiving data, so it is stopped first, without waiting for anything but the stored
+//    rules, then handed over.
+async function interceptDownload(item) {
+  if (item.byExtensionId) return false; // ours: handOver's fallback, the popup
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url)) return false;
-  if (item.byExtensionId) return false;
-  if (settings.minSizeMB > 0 && item.totalBytes > 0 && item.totalBytes < settings.minSizeMB * 1024 * 1024) return false;
+  const settings = await getSettings();
+  if (!settings.intercept || tooSmall(settings, item.totalBytes)) return false;
+  // EDM did not answer a moment ago: cancelling would only make the browser start over.
+  if (Date.now() - lastAppFailure < 15 * 1000) return false;
   const filename = item.filename ? item.filename.split(/[\\/]/).pop() : '';
-  if (!(await shouldCapture(url, filename))) return false;
+  if (!(await decide(url, filename))) return false;
 
   try { await api.downloads.cancel(item.id); } catch {}
   try { await api.downloads.erase({ id: item.id }); } catch {}
-  sendToApp({ url, filename, referer: item.referrer, kind: 'file' });
+  await handOver(url, filename, item.referrer);
   return true;
 }
 
-api.downloads.onDeterminingFilename.addListener((item, suggest) => {
-  interceptDownload(item).then((took) => { if (!took) { try { suggest(); } catch {} } });
-  return true;
-});
+if (api.downloads.onDeterminingFilename) {
+  api.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    interceptDownload(item).then((took) => { if (!took) { try { suggest(); } catch {} } }, () => { try { suggest(); } catch {} });
+    return true;
+  });
+} else {
+  api.downloads.onCreated.addListener((item) => {
+    if (item.state && item.state !== 'in_progress') return;
+    interceptDownload(item).catch(() => {});
+  });
+}
 
 // ---------- Formats for the in-page "Download this video" panel ----------
 // Read as soon as a player appears (like IDM), so the list is ready when the panel is clicked. One request per page;
@@ -466,19 +589,21 @@ api.tabs.onRemoved.addListener((tabId) => clearMedia(tabId));
 const menus = api.contextMenus || api.menus;
 function createMenus() {
   if (!menus) return;
-  try {
-    menus.removeAll(() => {
+  const create = () => {
+    try {
       menus.create({ id: 'dm-link', title: t('menuDownloadLink'), contexts: ['link', 'video', 'audio', 'image'] });
       menus.create({ id: 'dm-page-video', title: t('menuPageVideo'), contexts: ['page', 'video', 'frame', 'action'] });
       menus.create({
         id: 'dm-playlist', title: t('menuPlaylist'), contexts: ['page', 'link', 'video'],
         documentUrlPatterns: ['*://*.youtube.com/*'],
       });
-    });
-  } catch {}
+    } catch {}
+  };
+  // Promise style (Firefox ignores callbacks; Chrome MV3 returns a promise too).
+  try { Promise.resolve(menus.removeAll()).then(create, create); } catch { create(); }
 }
-api.runtime.onInstalled.addListener(() => { createMenus(); ping(); });
-api.runtime.onStartup?.addListener(() => { createMenus(); ping(); });
+api.runtime.onInstalled.addListener(() => { createMenus(); ping(); refreshRules(true).catch(() => {}); });
+api.runtime.onStartup?.addListener(() => { createMenus(); ping(); refreshRules(true).catch(() => {}); });
 menus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'dm-link') {
     const url = info.linkUrl || info.srcUrl;
@@ -523,6 +648,13 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'action': sendResponse(await downloadAction(msg.id, msg.action)); break;
         case 'download': sendResponse(await sendToApp(msg)); break;
         case 'openPlaylist': sendResponse(await openPlaylistInApp(msg.url)); break;
+        case 'takeLink': {
+          const r = await takeLink(msg);
+          if (r.navigate && BROWSER === 'firefox') passThrough.add(msg.url); // content.js opens it now: no second check
+          sendResponse(r);
+          break;
+        }
+        case 'syncRules': refreshRules().catch(() => {}); sendResponse({ ok: true }); break;
         case 'setSettings': await setSettings(msg.settings || {}); sendResponse({ ok: true }); break;
         case 'manifest': {
           // An HLS/DASH playlist the page loaded, recognised by its content (page_hook.js) whatever its URL or type.

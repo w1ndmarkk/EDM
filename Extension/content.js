@@ -1,4 +1,4 @@
-// EDM — content script (runs in every frame; hls.js is loaded before it)
+// EDM — content script (runs in every frame; hls.js and rules.js are loaded before it)
 // 1) Reports <video>/<audio>/<source>/<track> URLs on the page to the background script.
 // 2) Reads HLS playlists for the background script from inside this frame, so the requests carry the player's
 //    own cookies, origin and referrer.
@@ -10,8 +10,9 @@
   window.__edmContent = true;
   const api = typeof browser !== 'undefined' ? browser : chrome;
   const t = (k, subs) => { try { return api.i18n.getMessage(k, subs) || k; } catch { return k; } };
+  // Promise style works in Chrome (MV3) and Firefox; Firefox's `browser` namespace ignores callbacks.
   const send = (msg) => new Promise((resolve) => {
-    try { api.runtime.sendMessage(msg, (r) => resolve(api.runtime.lastError ? null : r)); } catch { resolve(null); }
+    try { Promise.resolve(api.runtime.sendMessage(msg)).then(resolve, () => resolve(null)); } catch { resolve(null); }
   });
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -25,6 +26,48 @@
     }
     return false;
   });
+
+  // ---------- Download links: taken over before the browser requests them ----------
+  // A click on a link to a captured file type (Settings ▸ File Types) goes to EDM without the browser downloading
+  // any of it: on a metered connection the browser must not fetch what EDM fetches again. Types the browser shows
+  // itself (PDF, video, audio, images) stay with the browser; the video panel offers those.
+  let linkRules = null;
+  let intercept = true;
+  try {
+    Promise.resolve(api.storage.local.get(['captureRules', 'settings'])).then((r) => {
+      linkRules = r && r.captureRules ? r.captureRules.rules : null;
+      intercept = !(r && r.settings && r.settings.intercept === false);
+    }, () => {});
+    api.storage.onChanged.addListener((c) => {
+      if (c.captureRules) linkRules = c.captureRules.newValue ? c.captureRules.newValue.rules : null;
+      if (c.settings) intercept = !(c.settings.newValue && c.settings.newValue.intercept === false);
+    });
+  } catch {}
+  if (window === window.top) send({ type: 'syncRules' });
+
+  function onLinkClick(e) {
+    if (!intercept || !linkRules || e.defaultPrevented) return;
+    if (e.type === 'click' ? e.button !== 0 : e.button !== 1) return;
+    const a = e.composedPath().find((n) => n && (n.tagName === 'A' || n.tagName === 'AREA') && n.href);
+    if (!a || !/^https?:/i.test(a.href)) return;
+    const url = a.href;
+    const filename = (a.getAttribute('download') || '').trim();
+    const ext = EDM_RULES.extension(filename) || EDM_RULES.urlExtension(url);
+    if (!ext || EDM_RULES.shownExtension(ext) || !EDM_RULES.capture(linkRules, url, filename)) return;
+    e.preventDefault();
+    e.stopPropagation(); // the page's own handler would navigate to it as well
+    const newTab = e.button === 1 || e.ctrlKey || e.shiftKey || e.metaKey || /^_blank$/i.test(a.target || '');
+    const target = a.target || '';
+    send({ type: 'takeLink', url, filename, referer: location.href }).then((r) => {
+      if (r && r.taken) return;
+      // A page after all (or the extension did not answer): open it the way the click would have.
+      if (newTab) window.open(url, '_blank');
+      else if (target && !/^_self$/i.test(target)) window.open(url, target);
+      else location.assign(url);
+    });
+  }
+  window.addEventListener('click', onLinkClick, true);
+  window.addEventListener('auxclick', onLinkClick, true);
 
   // ---------- Manifests the page loaded (page_hook.js recognises them by content) ----------
   document.addEventListener('edm-manifest-v1', (e) => {
@@ -68,7 +111,7 @@
   let enabled = true;
   const readEnabled = (s) => { enabled = !s || s.panel !== false; if (!enabled) hidePanel(); };
   try {
-    api.storage.local.get('settings', (r) => readEnabled(r && r.settings));
+    Promise.resolve(api.storage.local.get('settings')).then((r) => readEnabled(r && r.settings), () => {});
     api.storage.onChanged.addListener((changes) => { if (changes.settings) readEnabled(changes.settings.newValue); });
   } catch {}
 

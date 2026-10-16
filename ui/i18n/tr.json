@@ -149,7 +149,7 @@
   "No downloads in this view": "Bu görünümde indirme yok",
   "No matching downloads": "Eşleşen indirme yok",
   "No release information available yet.": "Henüz sürüm bilgisi yok.",
-  "No supported browser was found (Chrome, Edge, Brave).": "Desteklenen bir tarayıcı bulunamadı (Chrome, Edge, Brave).",
+  "No supported browser was found (Chrome, Edge, Brave, Firefox).": "Desteklenen bir tarayıcı bulunamadı (Chrome, Edge, Brave, Firefox).",
   "Not Now": "Şimdi Değil",
   "Not signed in": "Giriş yapılmadı",
   "Not started": "Başlatılmadı",
@@ -236,7 +236,7 @@
   "The downloaded yt-dlp binary could not be executed.": "İndirilen yt-dlp dosyası çalıştırılamadı.",
   "The extension uses port 48213 by default. If you change it here, enter the same port in the extension settings.": "Eklenti varsayılan olarak 48213 portunu kullanır. Değiştirirseniz eklenti ayarlarından da aynı portu girin.",
   "The extensions let your browsers hand their downloads to EDM and capture videos on pages. A guided setup walks you through each browser, one at a time. You can run it later from Settings ▸ Browser Extensions.": "Eklentiler sayesinde tarayıcılarınız indirmelerini EDM'ye aktarır ve sayfalardaki videolar yakalanır. Yönlendirmeli kurulum her tarayıcıyı tek tek ele alır. Bunu daha sonra Ayarlar ▸ Tarayıcı Eklentileri bölümünden de çalıştırabilirsiniz.",
-  "The guided setup walks you through each installed browser one at a time: Google Chrome, Microsoft Edge and Brave load the extension from a folder.": "Yönlendirmeli kurulum, kurulu tarayıcıları tek tek ele alır: Google Chrome, Microsoft Edge ve Brave eklentiyi bir klasörden yükler.",
+  "The guided setup walks you through each installed browser one at a time: Google Chrome, Microsoft Edge and Brave load the extension from a folder, Mozilla Firefox as a temporary add-on.": "Yönlendirmeli kurulum, kurulu tarayıcıları tek tek ele alır: Google Chrome, Microsoft Edge ve Brave eklentiyi bir klasörden, Mozilla Firefox ise geçici eklenti olarak yükler.",
   "The sign-in window is not open.": "Giriş penceresi açık değil.",
   "This download was removed from the list.": "Bu indirme listeden kaldırıldı.",
   "Time Left": "Kalan",
@@ -307,5 +307,9 @@
   "Enter a playlist address (https://…).": "Bir oynatma listesi adresi girin (https://…).",
   "Click the button below: Edge opens a new window and the address below is copied. Paste it into the address bar (Ctrl+V) and press Enter. Then switch on “Developer mode” in the left sidebar.": "Aşağıdaki düğmeye tıklayın: Edge yeni bir pencere açar ve aşağıdaki adres panoya kopyalanır. Adresi adres çubuğuna yapıştırıp (Ctrl+V) Enter'a basın. Ardından sol kenar çubuğundaki “Geliştirici modu”nu açın.",
   "Address copied: paste it into the address bar of the new Edge window (Ctrl+V) and press Enter.": "Adres kopyalandı: yeni Edge penceresinin adres çubuğuna yapıştırıp (Ctrl+V) Enter'a basın.",
-  "Open Edge and copy the address": "Edge'i aç ve adresi kopyala"
+  "Open Edge and copy the address": "Edge'i aç ve adresi kopyala",
+  "Open the add-on debugging page in Firefox": "Firefox'ta eklenti hata ayıklama sayfasını açın",
+  "Click the button below. Firefox opens the \u201CThis Firefox\u201D page, where add-ons are loaded from a folder. Firefox has no Developer mode switch.": "Aşağıdaki düğmeye tıklayın. Firefox, eklentilerin bir klasörden yüklendiği \u201CBu Firefox\u201D sayfasını açar. Firefox'ta Geliştirici modu anahtarı yoktur.",
+  "Click \u201CLoad Temporary Add-on\u2026\u201D. In the file dialog, paste the path below into the address bar (Ctrl+L), press Enter, select \u201Cmanifest.json\u201D and click \u201COpen\u201D.": "\u201CGeçici Eklenti Yükle\u2026\u201D düğmesine tıklayın. Dosya penceresinde aşağıdaki yolu adres çubuğuna yapıştırıp (Ctrl+L) Enter'a basın, \u201Cmanifest.json\u201D dosyasını seçip \u201CAç\u201D düğmesine tıklayın.",
+  "Firefox removes temporary add-ons when it closes: load it again after restarting Firefox, until a signed EDM add-on is available.": "Firefox geçici eklentileri kapanırken kaldırır: imzalı EDM eklentisi çıkana kadar Firefox'u her yeniden başlattığınızda eklentiyi tekrar yükleyin."
 }

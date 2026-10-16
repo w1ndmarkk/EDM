@@ -1,4 +1,5 @@
-// Guided, one-browser-at-a-time setup of the browser extension (Chrome, Edge, Brave: loaded unpacked from a folder).
+// Guided, one-browser-at-a-time setup of the browser extension (Chrome, Edge, Brave: loaded unpacked from a folder;
+// Firefox: loaded as a temporary add-on).
 'use strict';
 
 const STEPS = 4;
@@ -73,7 +74,7 @@ function render() {
   if (!browsers.length) {
     $('#browserName').textContent = t('Browser Extension Setup');
     $('#progressText').textContent = '';
-    main.append(para(t('No supported browser was found (Chrome, Edge, Brave).')));
+    main.append(para(t('No supported browser was found (Chrome, Edge, Brave, Firefox).')));
     $('#back').classList.add('hidden');
     $('#skip').classList.add('hidden');
     $('#next').textContent = t('Close');
@@ -106,6 +107,16 @@ function render() {
       break;
     }
     case 1: {
+      if (b.key === 'firefox') {
+        main.append(
+          title(t('Open the add-on debugging page in Firefox')),
+          para(t('Click the button below. Firefox opens the “This Firefox” page, where add-ons are loaded from a folder. Firefox has no Developer mode switch.')),
+          el('div', { class: 'row' }, button(t('Open {0}', 'about:debugging'), 'globe', async () => {
+            try { await invoke('open_extensions_page', { key: b.key }); error = ''; } catch (e) { error = String(e); }
+            render();
+          }, 'btn primary')));
+        break;
+      }
       // Edge does not let apps open edge:// pages: it opens a new window and the address is pasted by hand.
       const manual = b.key === 'edge';
       main.append(...[
@@ -125,8 +136,13 @@ function render() {
     case 2:
       main.append(
         title(t('Load the extension folder')),
-        para(t('Click “Load unpacked” on the extensions page. In the folder dialog, paste the path below into the address bar (Ctrl+L), press Enter, then click “Select Folder”.')),
+        para(b.key === 'firefox'
+          ? t('Click “Load Temporary Add-on…”. In the file dialog, paste the path below into the address bar (Ctrl+L), press Enter, select “manifest.json” and click “Open”.')
+          : t('Click “Load unpacked” on the extensions page. In the folder dialog, paste the path below into the address bar (Ctrl+L), press Enter, then click “Select Folder”.')),
         pathBox(b.folder),
+        b.key === 'firefox'
+          ? el('p', { class: 'caption warning', text: t('Firefox removes temporary add-ons when it closes: load it again after restarting Firefox, until a signed EDM add-on is available.') })
+          : '',
         el('div', { class: 'row' },
           button(copied ? t('Copied') : t('Copy Folder Path'), 'copy', async () => { await invoke('copy_text', { text: b.folder }); copied = true; render(); }, 'btn primary'),
           button(t('Show in Explorer'), null, () => invoke('open_folder', { which: 'browser:' + b.key }))));

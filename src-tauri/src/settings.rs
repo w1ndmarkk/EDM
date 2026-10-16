@@ -135,6 +135,17 @@ impl Settings {
         !ext.is_empty() && tokens(&self.capture_types).any(|p| wildcard_match(p, &ext))
     }
 
+    /// The capture rules for the browser extension, which applies them itself (Extension/rules.js mirrors
+    /// `should_capture`) so it can decide before the browser downloads anything.
+    pub fn capture_rules(&self) -> serde_json::Value {
+        let list = |s: &str| tokens(s).map(str::to_lowercase).collect::<Vec<_>>();
+        serde_json::json!({
+            "captureTypes": list(&self.capture_types),
+            "excludedSites": list(&self.excluded_sites),
+            "excludedAddresses": self.excluded_addresses.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect::<Vec<_>>(),
+        })
+    }
+
     pub fn download_dir(&self) -> PathBuf {
         PathBuf::from(&self.download_directory)
     }
@@ -256,6 +267,41 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The same cases the extension's rules.js is checked against: both must decide alike.
+    #[test]
+    fn rules_shared_with_the_extension() {
+        let s = Settings {
+            capture_types: "3GP 7Z AAC EXE ISO MP4 MSI PDF R0* R1* RAR ZIP".into(),
+            excluded_sites: "*.update.microsoft.com localhost".into(),
+            excluded_addresses: vec!["https://example.com/skip/".into(), "https://*.cdn.test/*.zip".into()],
+            ..Default::default()
+        };
+        let cases = [
+            ("https://a.com/x.zip", None, true),
+            ("https://a.com/x.ZIP?y=1", None, true),
+            ("https://a.com/dl?id=3", Some("Setup.exe"), true),
+            ("https://a.com/x.r05", None, true),
+            ("https://a.com/x.r15", None, true),
+            ("https://a.com/x.r20", None, false),
+            ("https://a.com/page.html", None, false),
+            ("https://a.com/dir/", None, false),
+            ("https://a.com/.zip", None, false),
+            ("https://x.update.microsoft.com/k.msi", None, false),
+            ("http://localhost/a.zip", None, false),
+            ("https://example.com/skip/a.zip", None, false),
+            ("https://example.com/keep/a.zip", None, true),
+            ("https://x.cdn.test/f/a.zip", None, false),
+            ("https://a.com/%C3%A7ay%20list.pdf", None, true),
+            ("https://a.com/a.zip", Some("notes.txt"), false),
+        ];
+        for (u, name, want) in cases {
+            assert_eq!(s.should_capture(&reqwest::Url::parse(u).unwrap(), name), want, "{u} {name:?}");
+        }
+        let r = s.capture_rules();
+        assert_eq!(r["captureTypes"][0], "3gp");
+        assert_eq!(r["excludedAddresses"][1], "https://*.cdn.test/*.zip");
+    }
 
     fn url(s: &str) -> reqwest::Url {
         reqwest::Url::parse(s).unwrap()

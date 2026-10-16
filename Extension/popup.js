@@ -7,10 +7,9 @@ document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el
 document.documentElement.lang = (() => { try { return api.i18n.getUILanguage(); } catch { return 'en'; } })();
 
 function send(msg) {
+  // Promise style: works in Chrome (MV3) and Firefox.
   return new Promise((resolve) => {
-    try {
-      api.runtime.sendMessage(msg, (r) => resolve(api.runtime.lastError ? null : r));
-    } catch { resolve(null); }
+    try { Promise.resolve(api.runtime.sendMessage(msg)).then(resolve, () => resolve(null)); } catch { resolve(null); }
   });
 }
 function fmtSize(n) {

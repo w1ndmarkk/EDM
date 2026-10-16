@@ -151,10 +151,12 @@ impl Server {
         if let Some(origin) = req.headers.get("origin") {
             if origin.starts_with("chrome-extension://") {
                 browser = "chrome".into();
+            } else if origin.starts_with("moz-extension://") {
+                browser = "firefox".into();
             }
         }
         if let Some(h) = req.headers.get("x-edm-extension").map(|h| h.to_lowercase()) {
-            if ["chrome", "brave", "edge"].contains(&h.as_str()) {
+            if ["chrome", "brave", "edge", "firefox"].contains(&h.as_str()) {
                 browser = h;
             }
         }
@@ -202,6 +204,9 @@ impl Server {
                     "active": self.store.summary().active_count,
                 }),
             ),
+            // The same rules for the extension to apply on its own (link clicks, Firefox responses): no round trip,
+            // so the browser does not start downloading while it waits.
+            ("GET", "/rules") => (200, json!({ "ok": true, "rules": settings.capture_rules() })),
             // Should this browser download be handed to the app? (File types, excluded sites and addresses.)
             ("POST", "/check") => {
                 let Ok(body) = serde_json::from_slice::<CheckBody>(&req.body) else {
