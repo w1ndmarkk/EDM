@@ -340,9 +340,9 @@ function setupKeyboard() {
     if (e.ctrlKey && e.key === ',') { e.preventDefault(); invoke('show_settings', { tab: null }); return; }
     if (inField) return;
     if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) {
+      // Pasted links go into the New Download dialog; nothing starts until the user clicks Download.
       e.preventDefault();
-      const text = await invoke('read_clipboard');
-      if (text) invoke('handle_paste', { text });
+      openAdd();
     } else if (e.ctrlKey && (e.key === 'a' || e.key === 'A')) {
       e.preventDefault();
       state.selection = new Set(filtered().map((i) => i.id));
@@ -416,9 +416,10 @@ async function openAdd() {
   dlg.updateOk();
   dlg.showModal();
   $('#addText').focus();
-  const clip = (await invoke('read_clipboard')).trim();
-  if (/^https?:\/\//i.test(clip) && !clip.includes('\n') && !$('#addText').value) {
-    $('#addText').value = clip;
+  // The links on the clipboard (one or many, also inside copied text), ready to start.
+  const links = [...new Set((await invoke('read_clipboard')).match(/https?:\/\/[^\s"'<>]+/gi) || [])].slice(0, 50);
+  if (links.length && !$('#addText').value) {
+    $('#addText').value = links.join('\n');
     $('#addText').select();
     dlg.updateOk();
   }
@@ -603,11 +604,7 @@ async function openOnboarding() {
     defaultValue: state.defaults.captureTypes,
     getSettings: () => state.settings,
   });
-  const clip = $('#obClipboard');
-  const syncClip = () => { clip.checked = state.settings.watchClipboard; };
-  clip.onchange = () => invoke('set_settings', { patch: { watchClipboard: clip.checked } });
-  onSettings.push(syncCapture, syncClip);
-  syncClip();
+  onSettings.push(syncCapture);
 
   const browsers = (await invoke('browsers_status')).filter((b) => b.installed);
   const list = $('#obBrowsers');

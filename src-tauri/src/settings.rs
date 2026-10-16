@@ -47,7 +47,6 @@ pub struct Settings {
     pub notify_on_complete: bool,
     pub show_detail_on_start: bool,
     pub auto_close_detail: bool,
-    pub watch_clipboard: bool,
     /// Extensions handed to the app, space separated, `*`/`?` wildcards ("ZIP R0* MP4").
     pub capture_types: String,
     /// Hosts never captured, space separated, wildcards ("*.update.microsoft.com").
@@ -83,7 +82,6 @@ impl Default for Settings {
             notify_on_complete: true,
             show_detail_on_start: true,
             auto_close_detail: false,
-            watch_clipboard: true,
             capture_types: DEFAULT_CAPTURE_TYPES.into(),
             excluded_sites: DEFAULT_EXCLUDED_SITES.into(),
             excluded_addresses: vec![],

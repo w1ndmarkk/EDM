@@ -24,7 +24,6 @@ use std::sync::Arc;
 
 use tauri::{Manager, RunEvent};
 
-use crate::clipboard::ClipboardWatcher;
 use crate::server::Server;
 use crate::settings::SettingsStore;
 use crate::store::Store;
@@ -55,19 +54,16 @@ fn main() {
             let store = Store::new(handle.clone(), settings.clone());
             let tools = Arc::new(Tools::new(handle.clone()));
             let server = Server::new(handle.clone(), store.clone(), settings.clone());
-            let clipboard = ClipboardWatcher::new(handle.clone(), store.clone(), settings.clone());
             let updater = Updater::new(handle.clone(), store.clone(), settings.clone());
             app.manage(settings.clone());
             app.manage(store.clone());
             app.manage(tools.clone());
             app.manage(server.clone());
-            app.manage(clipboard.clone());
             app.manage(updater.clone());
 
             tray::create(&handle)?;
             server.start();
             store.start_background();
-            clipboard.start();
             updater.start();
             let custom = settings.get().ytdlp_path;
             tauri::async_runtime::spawn(async move { tools.refresh(custom).await });
@@ -96,7 +92,6 @@ fn main() {
             commands::copy_url,
             commands::copy_text,
             commands::read_clipboard,
-            commands::handle_paste,
             commands::show_detail,
             commands::show_main,
             commands::show_settings,

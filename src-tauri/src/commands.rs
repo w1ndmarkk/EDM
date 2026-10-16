@@ -10,7 +10,7 @@ use tauri_plugin_autostart::ManagerExt;
 use uuid::Uuid;
 
 use crate::browsers::{self, Browser, BrowserInfo};
-use crate::clipboard::{self, ClipboardWatcher};
+use crate::clipboard;
 use crate::models::{DownloadKind, ItemView};
 use crate::prompt::{self, PromptSpec};
 use crate::server::{Server, ServerStatus, VERSION};
@@ -160,29 +160,22 @@ pub async fn queue_action(store: State<'_, Arc<Store>>, action: String) -> Res<(
 }
 
 #[tauri::command]
-pub async fn copy_url(store: State<'_, Arc<Store>>, clip: State<'_, Arc<ClipboardWatcher>>, id: Uuid) -> Res<()> {
+pub async fn copy_url(store: State<'_, Arc<Store>>, id: Uuid) -> Res<()> {
     if let Some(url) = store.url_of(id) {
-        clip.copy_text(&url);
+        clipboard::write_text(&url);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn copy_text(clip: State<'_, Arc<ClipboardWatcher>>, text: String) -> Res<()> {
-    clip.copy_text(&text);
+pub async fn copy_text(text: String) -> Res<()> {
+    clipboard::write_text(&text);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn read_clipboard() -> Res<String> {
     Ok(tokio::task::spawn_blocking(clipboard::read_text).await.ok().flatten().unwrap_or_default())
-}
-
-#[tauri::command]
-pub async fn handle_paste(clip: State<'_, Arc<ClipboardWatcher>>, text: String) -> Res<()> {
-    let clip = clip.inner().clone();
-    tauri::async_runtime::spawn(async move { clip.handle_paste(&text).await });
-    Ok(())
 }
 
 // MARK: - Windows
@@ -326,9 +319,9 @@ pub async fn prepare_browser_files(key: String) -> Res<String> {
 /// Returns true when the address has to be pasted by hand (Edge does not open edge:// pages for other apps);
 /// it is on the clipboard either way.
 #[tauri::command]
-pub async fn open_extensions_page(clip: State<'_, Arc<ClipboardWatcher>>, key: String) -> Res<bool> {
+pub async fn open_extensions_page(key: String) -> Res<bool> {
     let b = Browser::from_key(&key).ok_or("unknown browser")?;
-    clip.copy_text(b.extensions_page());
+    clipboard::write_text(b.extensions_page());
     browsers::open_extensions_page(b)
 }
 
