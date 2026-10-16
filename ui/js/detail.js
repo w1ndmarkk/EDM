@@ -7,7 +7,9 @@ const WIDTH = 580;
 const FULL_HEIGHT = 560;
 let item = null;
 let settings = null;
-let showDetails = true;
+// The segment map, connection table and yt-dlp output open on request ("Show Details >>"), like IDM.
+let showDetails = false;
+let shown = false;
 let mode = '';
 let title = '';
 let logPending = false;
@@ -57,7 +59,9 @@ function fit() {
       h = Math.ceil(view.scrollHeight) + 2;
       view.style.height = prev;
     }
-    invoke('window_fit', { width: window.innerWidth || WIDTH, height: h });
+    // The first fit also shows the window (it is created hidden), centred at its final size.
+    invoke('window_fit', { width: window.innerWidth || WIDTH, height: h, show: !shown });
+    shown = true;
   });
 }
 

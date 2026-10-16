@@ -340,6 +340,9 @@ pub async fn tools_status(tools: State<'_, Arc<Tools>>) -> Res<ToolsStatus> {
 #[tauri::command]
 pub async fn tools_refresh(tools: State<'_, Arc<Tools>>, settings: State<'_, Arc<SettingsStore>>) -> Res<ToolsStatus> {
     tools.refresh(settings.get().ytdlp_path).await;
+    // The newest versions arrive a moment later (event "tools"): "Up to date" or "Update to …".
+    let t = tools.inner().clone();
+    tauri::async_runtime::spawn(async move { t.check_latest().await });
     Ok(tools.status())
 }
 

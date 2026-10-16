@@ -243,22 +243,48 @@ function renderLogin() {
   $('#loginClear').disabled = login.cookieCount === 0;
 }
 
+// "deno 2.9.7 (stable, …)" → "2.9.7"; numeric comparison of dotted versions (updater::is_newer).
+const versionOf = (v) => String(v || '').replace(/^deno /, '').split(/\s/)[0].replace(/^v/, '');
+function isNewer(a, b) {
+  const x = a.split('.').map((n) => parseInt(n, 10) || 0), y = b.split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  }
+  return false;
+}
+
+/** Install, "Up to date" (nothing to do), "Update to <version>", or a plain update check when GitHub was not reached. */
+function toolButton(key, btn, path, installed, latest) {
+  const label = (name) => t(key === 'ytdlp' ? `${name} yt-dlp` : `${name} deno`);
+  if (tools.busy && tools.active === key) { btn.textContent = t('Installing…'); btn.disabled = true; return; }
+  btn.disabled = tools.busy;
+  if (!path) { btn.textContent = label('Install'); return; }
+  if (latest && installed && !isNewer(latest, versionOf(installed))) {
+    btn.textContent = t('Up to date');
+    btn.disabled = true;
+    return;
+  }
+  btn.textContent = latest ? t('Update to {0}', latest) : label('Update');
+}
+
 function renderTools() {
   if (!tools) return;
   $('#ytdlpName').textContent = tools.ytdlpPath ? (tools.ytdlpVersion ? `yt-dlp ${tools.ytdlpVersion}` : 'yt-dlp') : t('yt-dlp not found');
   $('#ytdlpName').classList.toggle('danger', !tools.ytdlpPath);
   $('#ytdlpPath').textContent = tools.ytdlpPath || '';
-  $('#installYtdlp').textContent = tools.busy ? t('Installing…') : tools.ytdlpPath ? t('Update yt-dlp') : t('Install yt-dlp');
-  $('#installYtdlp').disabled = tools.busy;
   $('#denoName').textContent = tools.denoPath ? (tools.denoVersion || 'deno') : t('deno not installed (needed for YouTube)');
   $('#denoName').classList.toggle('warning', !tools.denoPath);
   $('#denoPath').textContent = tools.denoPath || '';
-  $('#installDeno').textContent = tools.denoPath ? t('Update deno') : t('Install deno');
-  $('#installDeno').disabled = tools.busy;
-  $('#toolProgressRow').classList.toggle('hidden', !tools.busy);
-  $('#toolProgress').style.width = Math.round((tools.progress || 0) * 100) + '%';
-  $('#toolMessageRow').classList.toggle('hidden', !tools.message);
-  $('#toolMessage').textContent = tools.message || '';
+  toolButton('ytdlp', $('#installYtdlp'), tools.ytdlpPath, tools.ytdlpVersion, tools.ytdlpLatest);
+  toolButton('deno', $('#installDeno'), tools.denoPath, tools.denoVersion, tools.denoLatest);
+  // Progress and messages appear under the tool they belong to.
+  for (const key of ['ytdlp', 'deno']) {
+    const mine = tools.active === key;
+    $(`#${key}ProgressRow`).classList.toggle('hidden', !(mine && tools.busy));
+    $(`#${key}Progress`).style.width = Math.round((tools.progress || 0) * 100) + '%';
+    $(`#${key}MessageRow`).classList.toggle('hidden', !(mine && tools.message));
+    $(`#${key}Message`).textContent = mine ? tools.message || '' : '';
+  }
   $('#ffmpegLine').textContent = tools.ffmpegPath ? t('ffmpeg: {0}', tools.ffmpegPath) : t('ffmpeg not found (merging video and audio will not work)');
   $('#ffmpegLine').classList.toggle('danger', !tools.ffmpegPath);
 }

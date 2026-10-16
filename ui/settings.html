@@ -165,8 +165,8 @@
             <div class="grow"><span id="ytdlpName"></span><span class="path selectable" id="ytdlpPath"></span></div>
             <button class="btn" id="installYtdlp"></button>
           </div>
-          <div class="item hidden" id="toolProgressRow"><div class="grow"><div class="progress"><div id="toolProgress" style="width:0"></div></div></div></div>
-          <div class="item hidden" id="toolMessageRow"><span class="caption" id="toolMessage"></span></div>
+          <div class="item hidden" id="ytdlpProgressRow"><div class="grow"><div class="progress"><div id="ytdlpProgress" style="width:0"></div></div></div></div>
+          <div class="item hidden" id="ytdlpMessageRow"><span class="caption" id="ytdlpMessage"></span></div>
           <div class="item"><span class="caption" data-i18n="yt-dlp and ffmpeg are bundled with the app. “Update” downloads the latest yt-dlp release from GitHub (checksum verified) into the app's data folder and uses it instead of the bundled copy. Update when YouTube downloads stop working."></span></div>
           <div class="item">
             <input type="text" class="wide" id="ytdlpCustom" data-i18n-placeholder="Custom yt-dlp path (empty = bundled)">
@@ -177,6 +177,8 @@
               <span class="caption" data-i18n="YouTube requires a JavaScript runtime to unlock video streams. deno is downloaded from its official GitHub releases (checksum verified) into the app's data folder."></span></div>
             <button class="btn" id="installDeno"></button>
           </div>
+          <div class="item hidden" id="denoProgressRow"><div class="grow"><div class="progress"><div id="denoProgress" style="width:0"></div></div></div></div>
+          <div class="item hidden" id="denoMessageRow"><span class="caption" id="denoMessage"></span></div>
           <div class="item"><span class="caption selectable" id="ffmpegLine"></span></div>
         </div>
 

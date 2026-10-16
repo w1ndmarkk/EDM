@@ -306,5 +306,11 @@
   "Click the button below. Firefox asks whether to add EDM: click “Add”. The add-on is signed by Mozilla and stays installed. After an EDM update, run this step again to update the add-on.": "Aşağıdaki düğmeye tıklayın. Firefox EDM'nin eklenip eklenmeyeceğini sorar: “Ekle” düğmesine tıklayın. Eklenti Mozilla tarafından imzalıdır ve kalıcı olarak kurulu kalır. EDM'yi güncelledikten sonra eklentiyi güncellemek için bu adımı tekrarlayın.",
   "Install in Firefox": "Firefox'a kur",
   "Then open about:addons ▸ EDM ▸ Permissions and make sure “Access your data for all websites” is on.": "Ardından about:addons ▸ EDM ▸ İzinler bölümünü açın ve “Tüm web sitelerindeki verilerinize erişme” izninin açık olduğundan emin olun.",
-  "The signed add-on is not bundled with this EDM.": "Bu EDM sürümünde imzalı eklenti bulunmuyor."
+  "The signed add-on is not bundled with this EDM.": "Bu EDM sürümünde imzalı eklenti bulunmuyor.",
+  "Up to date": "Güncel",
+  "Update to {0}": "{0} sürümüne güncelle",
+  "Checking for a newer version…": "Yeni sürüm denetleniyor…",
+  "yt-dlp {0} is the newest version.": "yt-dlp {0} en son sürüm, güncelleme gerekmiyor.",
+  "{0} is the newest version.": "{0} en son sürüm, güncelleme gerekmiyor.",
+  "Could not check for a newer version.": "Yeni sürüm denetlenemedi."
 }

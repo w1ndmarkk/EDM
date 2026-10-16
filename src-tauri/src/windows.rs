@@ -155,7 +155,9 @@ pub fn show_detail(app: &AppHandle, id: Uuid, completed: bool) {
             .min_inner_size(480.0, 240.0)
             .maximizable(false)
             .center();
-        let built = without_flash(built).build();
+        // Shown by the page itself once it has sized the window to its content (detail.js fit), so it does not
+        // appear large and then shrink; `reveal` is the fallback.
+        let built = painted(built).visible(false).build();
         match built {
             Ok(w) => reveal(w),
             Err(e) => eprintln!("detail window: {e}"),

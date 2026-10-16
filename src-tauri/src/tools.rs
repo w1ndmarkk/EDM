@@ -19,6 +19,8 @@ use crate::segmented::{self, Event, CLIENT};
 use crate::store::DEFAULT_USER_AGENT;
 use crate::{tf, video};
 
+const YTDLP_REPO: &str = "yt-dlp/yt-dlp";
+const DENO_REPO: &str = "denoland/deno";
 const YTDLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 const YTDLP_SUMS_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS";
 const DENO_URL: &str = "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip";
@@ -36,17 +38,62 @@ pub struct ToolsStatus {
     pub deno_path: Option<String>,
     pub deno_version: Option<String>,
     pub ffmpeg_path: Option<String>,
+    /// The tool the running install and the last message belong to ("ytdlp" or "deno").
+    pub active: Option<String>,
+    /// Newest releases on GitHub (checked when the Video settings open); None = not known.
+    pub ytdlp_latest: Option<String>,
+    pub deno_latest: Option<String>,
+}
+
+/// "deno 2.9.7 (stable, …)" → "2.9.7"; "2026.08.19" stays as it is.
+fn version_number(v: &str) -> &str {
+    let v = v.strip_prefix("deno ").unwrap_or(v);
+    v.split_whitespace().next().unwrap_or(v).trim_start_matches('v')
+}
+
+/// "deno 2.9.7 (stable, release, …)" → "deno 2.9.7" for messages.
+fn version_label(v: &str) -> String {
+    if v.starts_with("deno ") { format!("deno {}", version_number(v)) } else { v.to_string() }
+}
+
+/// The installed version is the newest one (or newer, such as a nightly build).
+fn up_to_date(installed: Option<&str>, latest: Option<&str>) -> bool {
+    match (installed, latest) {
+        (Some(i), Some(l)) => !crate::updater::is_newer(version_number(l), version_number(i)),
+        _ => false,
+    }
+}
+
+/// Newest release tag, read from where github.com/<repo>/releases/latest redirects (headers only).
+async fn latest_release(repo: &str) -> Result<String, String> {
+    let resp = CLIENT
+        .head(format!("https://github.com/{repo}/releases/latest"))
+        .header("User-Agent", DEFAULT_USER_AGENT)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| segmented::error_text(&e))?;
+    let url = resp.url().clone();
+    let tag = url.path_segments().and_then(|mut s| s.next_back()).filter(|_| url.path().contains("/releases/tag/"));
+    tag.map(|t| t.trim_start_matches('v').to_string()).ok_or_else(|| t("Could not check for a newer version."))
 }
 
 pub struct Tools {
     app: AppHandle,
     state: Mutex<ToolsStatus>,
     versions: Mutex<HashMap<PathBuf, String>>,
+    /// When GitHub was last asked for the newest versions (at most once an hour).
+    latest_checked: Mutex<Option<std::time::Instant>>,
 }
 
 impl Tools {
     pub fn new(app: AppHandle) -> Self {
-        Self { app, state: Mutex::new(ToolsStatus::default()), versions: Mutex::new(HashMap::new()) }
+        Self {
+            app,
+            state: Mutex::new(ToolsStatus::default()),
+            versions: Mutex::new(HashMap::new()),
+            latest_checked: Mutex::new(None),
+        }
     }
 
     pub fn status(&self) -> ToolsStatus {
@@ -94,13 +141,41 @@ impl Tools {
         }
     }
 
-    fn begin(&self, message: String) -> Result<(), String> {
+    /// Asks GitHub for the newest yt-dlp and deno (a few KB), so Settings can show "Up to date" or the new version.
+    pub async fn check_latest(self: &Arc<Self>) {
+        {
+            let mut at = self.latest_checked.lock().unwrap();
+            if at.is_some_and(|t| t.elapsed() < Duration::from_secs(3600)) {
+                return;
+            }
+            *at = Some(std::time::Instant::now());
+        }
+        let (y, d) = tokio::join!(latest_release(YTDLP_REPO), latest_release(DENO_REPO));
+        self.set(|s| {
+            if let Ok(v) = y {
+                s.ytdlp_latest = Some(v);
+            }
+            if let Ok(v) = d {
+                s.deno_latest = Some(v);
+            }
+        });
+    }
+
+    /// Before downloading: the newest version, or None when the installed one is already it.
+    async fn newer_than_installed(&self, repo: &str, installed: Option<String>) -> Result<Option<String>, String> {
+        let latest = latest_release(repo).await?;
+        self.set(|s| if repo == YTDLP_REPO { s.ytdlp_latest = Some(latest.clone()) } else { s.deno_latest = Some(latest.clone()) });
+        Ok((!up_to_date(installed.as_deref(), Some(&latest))).then_some(latest))
+    }
+
+    fn begin(&self, tool: &str, message: String) -> Result<(), String> {
         let mut s = self.state.lock().unwrap();
         if s.busy {
             return Err(t("Another tool install is in progress."));
         }
         s.busy = true;
         s.progress = 0.0;
+        s.active = Some(tool.to_string());
         s.message = Some(message);
         let snapshot = s.clone();
         drop(s);
@@ -139,9 +214,22 @@ impl Tools {
         .map_err(|e| e.to_string())
     }
 
+    /// Installs the newest yt-dlp, unless the one in use is already the newest (then nothing is downloaded).
     pub async fn install_ytdlp(self: &Arc<Self>) -> Result<String, String> {
-        self.begin(t("Downloading yt-dlp…"))?;
-        let result = self.install_ytdlp_inner().await;
+        self.begin("ytdlp", t("Checking for a newer version…"))?;
+        let installed = self.status().ytdlp_version;
+        let result = match self.newer_than_installed(YTDLP_REPO, installed.clone()).await {
+            Ok(None) => {
+                let v = installed.unwrap_or_default();
+                self.finish(&Ok(v.clone()), |v| tf!("yt-dlp {0} is the newest version.", v));
+                return Ok(v);
+            }
+            Ok(Some(_)) => {
+                self.set(|s| s.message = Some(t("Downloading yt-dlp…")));
+                self.install_ytdlp_inner().await
+            }
+            Err(e) => Err(e),
+        };
         self.finish(&result, |v| tf!("yt-dlp {0} installed.", v));
         result
     }
@@ -177,10 +265,23 @@ impl Tools {
         result
     }
 
+    /// Installs the newest deno, unless the one in use is already the newest (then nothing is downloaded).
     pub async fn install_deno(self: &Arc<Self>) -> Result<String, String> {
-        self.begin(t("Downloading deno…"))?;
-        let result = self.install_deno_inner().await;
-        self.finish(&result, |v| tf!("{0} installed.", v));
+        self.begin("deno", t("Checking for a newer version…"))?;
+        let installed = self.status().deno_version;
+        let result = match self.newer_than_installed(DENO_REPO, installed.clone()).await {
+            Ok(None) => {
+                let v = installed.unwrap_or_default();
+                self.finish(&Ok(v.clone()), |v| tf!("{0} is the newest version.", version_label(v)));
+                return Ok(v);
+            }
+            Ok(Some(_)) => {
+                self.set(|s| s.message = Some(t("Downloading deno…")));
+                self.install_deno_inner().await
+            }
+            Err(e) => Err(e),
+        };
+        self.finish(&result, |v| tf!("{0} installed.", version_label(v)));
         result
     }
 
@@ -258,4 +359,24 @@ fn extract_file(zip_path: &Path, name: &str, dest: &Path) -> std::io::Result<()>
     let mut out = std::fs::File::create(dest)?;
     std::io::copy(&mut entry, &mut out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compares_installed_with_latest() {
+        assert_eq!(version_number("deno 2.9.7 (stable, release, x86_64-pc-windows-msvc)"), "2.9.7");
+        assert_eq!(version_number("2026.08.19"), "2026.08.19");
+        assert_eq!(version_label("deno 2.9.7 (stable, release, x86_64-pc-windows-msvc)"), "deno 2.9.7");
+        assert!(up_to_date(Some("2026.08.19"), Some("2026.08.19")));
+        assert!(up_to_date(Some("deno 2.9.7 (stable)"), Some("2.9.7")));
+        assert!(!up_to_date(Some("2026.07.01"), Some("2026.08.19")));
+        assert!(!up_to_date(Some("deno 2.9.6 (stable)"), Some("2.9.7")));
+        // A nightly build newer than the latest release counts as up to date.
+        assert!(up_to_date(Some("2026.08.20.123456"), Some("2026.08.19")));
+        assert!(!up_to_date(None, Some("2026.08.19")));
+        assert!(!up_to_date(Some("2026.08.19"), None));
+    }
 }
