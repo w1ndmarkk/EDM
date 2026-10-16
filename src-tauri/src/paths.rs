@@ -53,6 +53,11 @@ pub fn bundled_tools_dir() -> PathBuf {
     resource_dir().join("tools")
 }
 
+/// The Firefox add-on signed by Mozilla (Extension-signed\edm-firefox.xpi in the repository), shipped with the app.
+pub fn bundled_firefox_addon() -> PathBuf {
+    resource_dir().join("extension-signed").join("edm-firefox.xpi")
+}
+
 /// Unpacked copy of the browser extension shipped with the app.
 pub fn bundled_extension_dir() -> PathBuf {
     if let Ok(p) = std::env::var("EDM_EXTENSION_DIR") {

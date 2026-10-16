@@ -109,6 +109,7 @@ fn main() {
             commands::browsers_status,
             commands::prepare_browser_files,
             commands::open_extensions_page,
+            commands::install_signed_addon,
             commands::tools_status,
             commands::tools_refresh,
             commands::install_tool,

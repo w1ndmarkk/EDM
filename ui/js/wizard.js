@@ -1,8 +1,10 @@
 // Guided, one-browser-at-a-time setup of the browser extension (Chrome, Edge, Brave: loaded unpacked from a folder;
-// Firefox: loaded as a temporary add-on).
+// Firefox: the signed add-on bundled with the app, else a temporary add-on).
 'use strict';
 
-const STEPS = 4;
+// Steps per browser. Firefox with the signed add-on bundled: install it and done. Otherwise the folder is prepared,
+// the extensions page opened and the folder loaded.
+const stepsOf = (b) => (b && b.signedPackage ? ['install', 'ready'] : ['prepare', 'open', 'load', 'ready']);
 let browsers = [];
 let index = 0;
 let step = 0;
@@ -12,7 +14,8 @@ let copied = false;
 
 const closeWindow = () => TAURI.window.getCurrentWindow().close();
 const browser = () => browsers[index];
-const isLastStep = () => step >= STEPS - 1;
+const steps = () => stepsOf(browser());
+const isLastStep = () => step >= steps().length - 1;
 const isLastBrowser = () => index >= browsers.length - 1;
 
 async function init() {
@@ -24,9 +27,9 @@ async function init() {
   $('#back').onclick = back;
   $('#skip').onclick = skip;
   $('#next').onclick = next;
-  listen('server', (s) => { server = s; if (step === STEPS - 1) render(); });
+  listen('server', (s) => { server = s; if (isLastStep()) render(); });
   // The extension connects right after it is loaded; keep the status row live.
-  setInterval(async () => { server = await invoke('server_status'); if (step === STEPS - 1) render(); }, 2000);
+  setInterval(async () => { server = await invoke('server_status'); if (browsers.length && isLastStep()) render(); }, 2000);
   render();
 }
 
@@ -83,14 +86,24 @@ function render() {
   }
   const b = browser();
   $('#browserName').textContent = b.name;
-  $('#progressText').textContent = t('Browser {0} of {1} · Step {2} of {3}', index + 1, browsers.length, step + 1, STEPS);
-  $('#dots').innerHTML = Array.from({ length: STEPS }, (_, i) => `<span class="${i <= step ? 'on' : ''}"></span>`).join('');
+  $('#progressText').textContent = t('Browser {0} of {1} · Step {2} of {3}', index + 1, browsers.length, step + 1, steps().length);
+  $('#dots').innerHTML = Array.from({ length: steps().length }, (_, i) => `<span class="${i <= step ? 'on' : ''}"></span>`).join('');
   $('#back').disabled = step === 0 && index === 0;
   $('#skip').classList.toggle('hidden', isLastBrowser() && isLastStep());
   $('#next').textContent = isLastStep() ? (isLastBrowser() ? t('Finish') : t('Next Browser')) : t('Next');
 
-  switch (step) {
-    case 0: {
+  switch (steps()[step]) {
+    case 'install':
+      main.append(
+        title(t('Install the EDM add-on')),
+        para(t('Click the button below. Firefox asks whether to add EDM: click “Add”. The add-on is signed by Mozilla and stays installed. After an EDM update, run this step again to update the add-on.')),
+        el('div', { class: 'row' }, button(t('Install in Firefox'), 'puzzle', async () => {
+          try { await invoke('install_signed_addon', { key: b.key }); error = ''; } catch (e) { error = String(e); }
+          render();
+        }, 'btn primary')),
+        el('p', { class: 'caption', text: t('Then open about:addons ▸ EDM ▸ Permissions and make sure “Access your data for all websites” is on.') }));
+      break;
+    case 'prepare': {
       main.append(
         title(t('Prepare the extension files')),
         para(t('{0} does not allow apps to install extensions automatically, so the extension is loaded from a folder. The files are placed in:', b.name)),
@@ -106,7 +119,7 @@ function render() {
         el('p', { class: 'caption', text: t('Keep this folder in place; the browser loads the extension from it.') }));
       break;
     }
-    case 1: {
+    case 'open': {
       if (b.key === 'firefox') {
         main.append(
           title(t('Open the add-on debugging page in Firefox')),
@@ -133,7 +146,7 @@ function render() {
       ].filter(Boolean));
       break;
     }
-    case 2:
+    case 'load':
       main.append(
         title(t('Load the extension folder')),
         para(b.key === 'firefox'

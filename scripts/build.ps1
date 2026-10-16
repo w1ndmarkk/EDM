@@ -19,6 +19,23 @@ Write-Host '> Tauri CLI'
 cargo tauri --version 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) { cargo install tauri-cli --version '^2' --locked }
 
+Write-Host '> Signed Firefox add-on'
+# The installer ships Extension-signed\edm-firefox.xpi, signed on addons.mozilla.org. When the extension changes
+# (and its manifest version goes up), sign the new version there and replace the file.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$extVersion = (Get-Content "$root\Extension\manifest.json" -Raw | ConvertFrom-Json).version
+$xpi = [IO.Compression.ZipFile]::OpenRead("$root\Extension-signed\edm-firefox.xpi")
+try {
+    $reader = New-Object IO.StreamReader(($xpi.Entries | Where-Object FullName -eq 'manifest.json').Open())
+    $signedVersion = ($reader.ReadToEnd() | ConvertFrom-Json).version
+    $reader.Dispose()
+} finally { $xpi.Dispose() }
+if ($signedVersion -ne $extVersion) {
+    Write-Warning "The signed Firefox add-on is version $signedVersion, the extension is $extVersion. Sign build\edm-extension-firefox-$extVersion.zip on addons.mozilla.org and replace Extension-signed\edm-firefox.xpi."
+} else {
+    Write-Host "  edm-firefox.xpi $signedVersion matches the extension"
+}
+
 Write-Host '> Unit tests'
 Push-Location "$root\src-tauri"
 try {

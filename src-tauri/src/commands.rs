@@ -316,6 +316,11 @@ pub async fn prepare_browser_files(key: String) -> Res<String> {
         .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn install_signed_addon(key: String) -> Res<()> {
+    browsers::install_signed_addon(Browser::from_key(&key).ok_or("unknown browser")?)
+}
+
 /// Returns true when the address has to be pasted by hand (Edge does not open edge:// pages for other apps);
 /// it is on the clipboard either way.
 #[tauri::command]

@@ -301,5 +301,10 @@
   "Open the add-on debugging page in Firefox": "Firefox'ta eklenti hata ayıklama sayfasını açın",
   "Click the button below. Firefox opens the \u201CThis Firefox\u201D page, where add-ons are loaded from a folder. Firefox has no Developer mode switch.": "Aşağıdaki düğmeye tıklayın. Firefox, eklentilerin bir klasörden yüklendiği \u201CBu Firefox\u201D sayfasını açar. Firefox'ta Geliştirici modu anahtarı yoktur.",
   "Click \u201CLoad Temporary Add-on\u2026\u201D. In the file dialog, paste the path below into the address bar (Ctrl+L), press Enter, select \u201Cmanifest.json\u201D and click \u201COpen\u201D.": "\u201CGeçici Eklenti Yükle\u2026\u201D düğmesine tıklayın. Dosya penceresinde aşağıdaki yolu adres çubuğuna yapıştırıp (Ctrl+L) Enter'a basın, \u201Cmanifest.json\u201D dosyasını seçip \u201CAç\u201D düğmesine tıklayın.",
-  "Firefox removes temporary add-ons when it closes: load it again after restarting Firefox, until a signed EDM add-on is available.": "Firefox geçici eklentileri kapanırken kaldırır: imzalı EDM eklentisi çıkana kadar Firefox'u her yeniden başlattığınızda eklentiyi tekrar yükleyin."
+  "Firefox removes temporary add-ons when it closes: load it again after restarting Firefox, until a signed EDM add-on is available.": "Firefox geçici eklentileri kapanırken kaldırır: imzalı EDM eklentisi çıkana kadar Firefox'u her yeniden başlattığınızda eklentiyi tekrar yükleyin.",
+  "Install the EDM add-on": "EDM eklentisini kurun",
+  "Click the button below. Firefox asks whether to add EDM: click “Add”. The add-on is signed by Mozilla and stays installed. After an EDM update, run this step again to update the add-on.": "Aşağıdaki düğmeye tıklayın. Firefox EDM'nin eklenip eklenmeyeceğini sorar: “Ekle” düğmesine tıklayın. Eklenti Mozilla tarafından imzalıdır ve kalıcı olarak kurulu kalır. EDM'yi güncelledikten sonra eklentiyi güncellemek için bu adımı tekrarlayın.",
+  "Install in Firefox": "Firefox'a kur",
+  "Then open about:addons ▸ EDM ▸ Permissions and make sure “Access your data for all websites” is on.": "Ardından about:addons ▸ EDM ▸ İzinler bölümünü açın ve “Tüm web sitelerindeki verilerinize erişme” izninin açık olduğundan emin olun.",
+  "The signed add-on is not bundled with this EDM.": "Bu EDM sürümünde imzalı eklenti bulunmuyor."
 }

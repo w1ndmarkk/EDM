@@ -112,6 +112,8 @@ pub struct BrowserInfo {
     pub files_prepared: bool,
     pub folder: String,
     pub extensions_page: &'static str,
+    /// A signed add-on is bundled (Firefox): one-click install instead of loading a folder.
+    pub signed_package: bool,
 }
 
 pub fn list() -> Vec<BrowserInfo> {
@@ -124,8 +126,20 @@ pub fn list() -> Vec<BrowserInfo> {
             files_prepared: b.files_prepared(),
             folder: b.plugin_folder().to_string_lossy().into_owned(),
             extensions_page: b.extensions_page(),
+            signed_package: signed_package(b).is_some(),
         })
         .collect()
+}
+
+fn signed_package(b: Browser) -> Option<PathBuf> {
+    (b == Browser::Firefox).then(paths::bundled_firefox_addon).filter(|p| p.is_file())
+}
+
+/// Opens the signed add-on in the browser, which asks the user to confirm the installation.
+pub fn install_signed_addon(b: Browser) -> Result<(), String> {
+    let xpi = signed_package(b).ok_or_else(|| crate::i18n::t("The signed add-on is not bundled with this EDM."))?;
+    let exe = b.exe_path().ok_or_else(|| format!("{} not found", b.name()))?;
+    std::process::Command::new(exe).arg(xpi).spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 /// Copies the unpacked extension into the browser's plugin folder. Returns the folder.
