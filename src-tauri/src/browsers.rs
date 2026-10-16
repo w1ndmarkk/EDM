@@ -164,8 +164,9 @@ pub fn prepare_files(b: Browser) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
-/// Add-on ID on addons.mozilla.org; it must not change once the add-on is signed.
-pub const FIREFOX_ADDON_ID: &str = "edm@w1ndmarkk";
+/// Add-on ID on addons.mozilla.org; it must not change once the add-on is signed. ("edm@w1ndmarkk" belonged to a
+/// deleted submission: AMO never reuses the ID of a deleted add-on.)
+pub const FIREFOX_ADDON_ID: &str = "edm-extension@w1ndmarkk";
 
 /// Turns the Chrome manifest into Firefox's (keep scripts/pack-extension.ps1 in step):
 /// a background script instead of a service worker, the add-on ID, no Chrome-only keys, and blocking webRequest
@@ -180,8 +181,8 @@ pub fn firefox_flavor(m: &mut Value) {
     m["browser_specific_settings"] = json!({
         "gecko": {
             "id": FIREFOX_ADDON_ID,
-            // content_scripts "world": "MAIN"
-            "strict_min_version": "128.0",
+            // data_collection_permissions: Firefox 140, Firefox for Android 142 (content_scripts "world": "MAIN" needs 128)
+            "strict_min_version": "142.0",
             "data_collection_permissions": { "required": ["none"] }
         }
     });

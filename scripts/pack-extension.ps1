@@ -16,7 +16,7 @@ function Get-FirefoxManifest([string]$json) {
     $m = $json | ConvertFrom-Json
     $m.background = [pscustomobject]@{ scripts = @('hls.js', 'rules.js', 'background.js') }
     if ($m.permissions -notcontains 'webRequestBlocking') { $m.permissions = @($m.permissions) + 'webRequestBlocking' }
-    $gecko = [pscustomobject]@{ id = 'edm@w1ndmarkk'; strict_min_version = '128.0'; data_collection_permissions = [pscustomobject]@{ required = @('none') } }
+    $gecko = [pscustomobject]@{ id = 'edm-extension@w1ndmarkk'; strict_min_version = '142.0'; data_collection_permissions = [pscustomobject]@{ required = @('none') } }
     $m | Add-Member -NotePropertyName browser_specific_settings -NotePropertyValue ([pscustomobject]@{ gecko = $gecko }) -Force
     $m.PSObject.Properties.Remove('minimum_chrome_version')
     foreach ($cs in $m.content_scripts) {
