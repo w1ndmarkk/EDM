@@ -241,6 +241,8 @@ async function takeLink(msg) {
     head = await fetch(msg.url, { method: 'HEAD', credentials: 'include', cache: 'no-store', signal: ctrl.signal });
     clearTimeout(timer);
   } catch { /* no answer to HEAD: trust the address */ }
+  // Not there: the browser shows the server's answer (a 403 or 405 can be a signed or GET-only address: trusted).
+  if (head && (head.status === 404 || head.status === 410)) return { navigate: true };
   if (head && head.ok) {
     const ct = head.headers.get('content-type') || '';
     const cd = head.headers.get('content-disposition') || '';

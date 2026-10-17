@@ -45,6 +45,9 @@
   } catch {}
   if (window === window.top) send({ type: 'syncRules' });
 
+  // The click is noted first (capture phase) and decided last: after the page's own handlers, which may show
+  // their own dialog instead (some sites put a placeholder address on a button that opens a "Follow link" box).
+  // A listener added now on window runs after every handler registered before it.
   function onLinkClick(e) {
     if (!intercept || !linkRules || e.defaultPrevented) return;
     if (e.type === 'click' ? e.button !== 0 : e.button !== 1) return;
@@ -54,8 +57,12 @@
     const filename = (a.getAttribute('download') || '').trim();
     const ext = EDM_RULES.extension(filename) || EDM_RULES.urlExtension(url);
     if (!ext || EDM_RULES.shownExtension(ext) || !EDM_RULES.capture(linkRules, url, filename)) return;
+    window.addEventListener(e.type, (last) => { if (last === e) takeClick(e, a, url, filename); }, { once: true });
+  }
+
+  function takeClick(e, a, url, filename) {
+    if (e.defaultPrevented) return; // the page handled the click itself
     e.preventDefault();
-    e.stopPropagation(); // the page's own handler would navigate to it as well
     const newTab = e.button === 1 || e.ctrlKey || e.shiftKey || e.metaKey || /^_blank$/i.test(a.target || '');
     const target = a.target || '';
     send({ type: 'takeLink', url, filename, referer: location.href }).then((r) => {
