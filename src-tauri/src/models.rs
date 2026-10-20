@@ -94,6 +94,10 @@ pub struct DownloadItem {
     /// yt-dlp: current phase (downloading video/audio, merging…).
     #[serde(skip)]
     pub stage: String,
+    /// The site only lets the browser download this file (bot check): the extension that handed it over takes
+    /// it back to the browser.
+    #[serde(skip)]
+    pub handback: bool,
 }
 
 impl Default for DownloadItem {
@@ -126,6 +130,7 @@ impl Default for DownloadItem {
             speed: 0.0,
             log: String::new(),
             stage: String::new(),
+            handback: false,
         }
     }
 }
@@ -164,6 +169,8 @@ pub struct ItemView {
     pub final_path: Option<String>,
     pub speed: f64,
     pub stage: String,
+    /// Bot-checked file: the extension that handed it over gives it back to the browser.
+    pub handback: bool,
     pub category: FileCategory,
     pub destination: String,
 }

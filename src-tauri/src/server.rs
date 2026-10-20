@@ -251,6 +251,8 @@ impl Server {
                         json!({
                             "id": i.id, "name": i.file_name, "state": i.state, "progress": progress, "speed": i.speed,
                             "total": i.total_bytes, "received": i.received_bytes, "stage": i.stage, "error": i.error_message,
+                            // Bot-checked: the extension gives it back to the browser.
+                            "handback": i.handback, "url": i.url,
                         })
                     })
                     .collect();

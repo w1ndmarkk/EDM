@@ -57,6 +57,9 @@ pub enum Event {
 pub enum DlError {
     Cancelled,
     Failed(String),
+    /// The server answered with a bot check (Cloudflare "Just a moment…") instead of the file: only the browser
+    /// that passed the check can download it.
+    BrowserOnly,
 }
 
 impl std::fmt::Display for DlError {
@@ -64,8 +67,23 @@ impl std::fmt::Display for DlError {
         match self {
             DlError::Cancelled => write!(f, "cancelled"),
             DlError::Failed(m) => f.write_str(m),
+            DlError::BrowserOnly => f.write_str(&t("The site's bot check lets only the browser download this file.")),
         }
     }
+}
+
+/// A bot-check page instead of the file. Cloudflare marks its challenges with "cf-mitigated"; without that header
+/// a 403/503 HTML page from Cloudflare or DDoS-Guard is taken as one too.
+fn bot_check(resp: &reqwest::Response) -> bool {
+    let h = resp.headers();
+    if h.contains_key("cf-mitigated") {
+        return true;
+    }
+    let text = |name: &str| h.get(name).and_then(|v| v.to_str().ok()).unwrap_or("").to_lowercase();
+    let server = text("server");
+    matches!(resp.status().as_u16(), 403 | 503)
+        && text("content-type").contains("text/html")
+        && (server.contains("cloudflare") || server.contains("ddos-guard"))
 }
 
 pub struct Config {
@@ -118,12 +136,20 @@ impl Shared {
     }
 
     /// Credentials (Cookie/Authorization) are only sent to the host the download was requested for.
+    /// The headers of the download (the browser's own request headers when the extension handed it over, so sites
+    /// behind bot protection see what the browser sends), minus those this downloader sets itself or that would
+    /// break segmented requests (ranges, conditional requests, compressed bodies, connection handling).
     fn request(&self, url: &Url, range: Option<String>) -> RequestBuilder {
         const CREDENTIALS: [&str; 3] = ["cookie", "authorization", "proxy-authorization"];
+        const OWN: [&str; 15] = [
+            "host", "connection", "keep-alive", "proxy-connection", "content-length", "transfer-encoding", "te", "upgrade",
+            "range", "if-range", "if-match", "if-none-match", "if-modified-since", "if-unmodified-since", "accept-encoding",
+        ];
         let allow_credentials = same_origin(url, &self.cfg.url);
         let mut headers = HeaderMap::new();
         for (k, v) in &self.cfg.headers {
-            if !allow_credentials && CREDENTIALS.contains(&k.to_lowercase().as_str()) {
+            let lower = k.to_lowercase();
+            if OWN.contains(&lower.as_str()) || (!allow_credentials && CREDENTIALS.contains(&lower.as_str())) {
                 continue;
             }
             if let (Ok(name), Ok(value)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
@@ -131,7 +157,6 @@ impl Shared {
             }
         }
         headers.insert("accept-encoding", HeaderValue::from_static("identity"));
-        headers.insert("cache-control", HeaderValue::from_static("no-cache"));
         if let Some(r) = range.and_then(|r| HeaderValue::from_str(&r).ok()) {
             headers.insert("range", r);
         }
@@ -205,6 +230,9 @@ async fn probe(sh: &Shared) -> Result<ProbeResult, DlError> {
         Ok(Ok(r)) => r,
     };
     let status = resp.status().as_u16();
+    if bot_check(&resp) {
+        return Err(DlError::BrowserOnly);
+    }
     if !(200..300).contains(&status) {
         return Err(DlError::Failed(http_status_message(status)));
     }
@@ -452,6 +480,9 @@ async fn run_single(sh: &Shared) -> Result<(), DlError> {
         Ok(Ok(r)) => r,
     };
     let status = resp.status().as_u16();
+    if bot_check(&resp) {
+        return Err(DlError::BrowserOnly);
+    }
     if !(200..300).contains(&status) {
         return Err(DlError::Failed(http_status_message(status)));
     }

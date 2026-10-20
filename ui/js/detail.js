@@ -26,7 +26,17 @@ async function init() {
   $('#toggleDetails').onclick = () => { showDetails = !showDetails; render(); fit(); };
   $('#doneClose').onclick = closeWindow;
   $('#doneReveal').onclick = () => invoke('download_action', { ids: [id], action: 'reveal' });
-  $('#doneOpen').onclick = async () => { await invoke('download_action', { ids: [id], action: 'open' }); closeWindow(); };
+  $('#doneOpen').onclick = async () => {
+    try {
+      await invoke('download_action', { ids: [id], action: 'open' });
+      closeWindow();
+    } catch (e) {
+      // The window stays: the reason is shown, and "Show in Folder" is still there.
+      $('#doneError').textContent = t('Could not open the file: {0}', String(e));
+      $('#doneError').classList.remove('hidden');
+      fit();
+    }
+  };
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && mode === 'completed') closeWindow();
     if (e.key === 'Enter' && mode === 'completed') $('#doneOpen').click();

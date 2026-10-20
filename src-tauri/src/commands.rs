@@ -140,7 +140,7 @@ pub async fn download_action(store: State<'_, Arc<Store>>, ids: Vec<Uuid>, actio
             "cancel" => store.cancel(id),
             "remove" => store.remove(id, false),
             "trash" => store.remove(id, true),
-            "open" => store.open(id),
+            "open" => store.open(id)?,
             "reveal" => store.reveal(id),
             _ => return Err(format!("unknown action {action}")),
         }

@@ -11,3 +11,6 @@ Tools/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Add-on packages downloaded from addons.mozilla.org (the bundled one lives in Extension-signed/)
+/*.xpi

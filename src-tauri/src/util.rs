@@ -69,9 +69,36 @@ pub fn reveal_in_explorer(path: &std::path::Path) {
     }
 }
 
-/// Opens a file with its associated application.
-pub fn open_path(path: &std::path::Path) {
-    let _ = tauri_plugin_opener::open_path(path, None::<&str>);
+/// Opens a file the way a double-click in Explorer does: its associated application, or Windows' "How do you want
+/// to open this file?" when there is none (the plain "open" verb fails silently then, e.g. .rar without an
+/// archiver). Runs on its own COM thread, as ShellExecuteEx requires.
+pub fn open_path(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE};
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_INVOKEIDLIST, SEE_MASK_NOASYNC, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    if !path.is_file() {
+        return Err(crate::i18n::t("The file is no longer there."));
+    }
+    let wide = |p: &std::path::Path| p.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
+    let file = wide(path);
+    let dir = path.parent().map(wide).unwrap_or_else(|| vec![0]);
+    std::thread::spawn(move || unsafe {
+        CoInitializeEx(std::ptr::null(), (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32);
+        let mut info: SHELLEXECUTEINFOW = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+        info.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_NOASYNC;
+        info.lpFile = file.as_ptr();
+        info.lpDirectory = dir.as_ptr();
+        info.nShow = SW_SHOWNORMAL as i32;
+        let ok = ShellExecuteExW(&mut info) != 0;
+        let err = std::io::Error::last_os_error();
+        CoUninitialize();
+        if ok { Ok(()) } else { Err(err.to_string()) }
+    })
+    .join()
+    .unwrap_or_else(|_| Err("open failed".into()))
 }
 
 pub fn open_url(url: &str) {

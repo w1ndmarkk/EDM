@@ -312,5 +312,8 @@
   "Checking for a newer version…": "Yeni sürüm denetleniyor…",
   "yt-dlp {0} is the newest version.": "yt-dlp {0} en son sürüm, güncelleme gerekmiyor.",
   "{0} is the newest version.": "{0} en son sürüm, güncelleme gerekmiyor.",
-  "Could not check for a newer version.": "Yeni sürüm denetlenemedi."
+  "Could not check for a newer version.": "Yeni sürüm denetlenemedi.",
+  "The site's bot check lets only the browser download this file.": "Sitenin bot doğrulaması bu dosyayı yalnızca tarayıcının indirmesine izin veriyor.",
+  "The file is no longer there.": "Dosya artık yerinde değil.",
+  "Could not open the file: {0}": "Dosya açılamadı: {0}"
 }

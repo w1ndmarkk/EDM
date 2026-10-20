@@ -210,6 +210,7 @@ impl Store {
             final_path: i.final_path.clone(),
             speed: i.speed,
             stage: i.stage.clone(),
+            handback: i.handback,
             category: i.category(),
             destination,
         }
@@ -257,17 +258,25 @@ impl Store {
             None => Url::parse(&req.url).ok().filter(|u| matches!(u.scheme(), "http" | "https"))?,
         };
         let settings = self.settings.get();
+        // The browser's request headers (when the extension sent them), then the explicit fields; one entry per
+        // header whatever its spelling ("cookie" from an HTTP/2 request, "Cookie" here).
         let mut headers = req.extra_headers.clone();
+        let mut set = |name: &str, value: String| {
+            headers.retain(|k, _| !k.eq_ignore_ascii_case(name));
+            headers.insert(name.into(), value);
+        };
         if let Some(r) = req.referer.filter(|s| !s.is_empty()) {
-            headers.insert("Referer".into(), r);
+            set("Referer", r);
         }
         if let Some(ua) = req.user_agent.filter(|s| !s.is_empty()) {
-            headers.insert("User-Agent".into(), ua);
+            set("User-Agent", ua);
         }
         if let Some(c) = req.cookie_header.filter(|s| !s.is_empty()) {
-            headers.insert("Cookie".into(), c);
+            set("Cookie", c);
         }
-        headers.entry("User-Agent".into()).or_insert_with(|| DEFAULT_USER_AGENT.into());
+        if !headers.keys().any(|k| k.eq_ignore_ascii_case("user-agent")) {
+            headers.insert("User-Agent".into(), DEFAULT_USER_AGENT.into());
+        }
 
         let mut name = req.file_name.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| file_name_from_url(&url));
         if req.kind == DownloadKind::Video {
@@ -461,6 +470,16 @@ impl Store {
                     }
                 }
                 Err(DlError::Cancelled) => {}
+                Err(DlError::BrowserOnly) => {
+                    // The browser extension that handed this download over sees the flag in /downloads and lets
+                    // the browser download it (it passed the site's check); EDM received only the check page.
+                    let item = &mut inner.items[idx];
+                    item.state = DownloadState::Failed;
+                    item.error_message = Some(DlError::BrowserOnly.to_string());
+                    item.speed = 0.0;
+                    item.handback = true;
+                    let _ = std::fs::remove_file(item.part_path());
+                }
                 Err(DlError::Failed(msg)) => {
                     let item = &mut inner.items[idx];
                     if !matches!(item.state, DownloadState::Paused | DownloadState::Cancelled) {
@@ -930,11 +949,10 @@ impl Store {
         }
     }
 
-    pub fn open(&self, id: Uuid) {
+    pub fn open(&self, id: Uuid) -> Result<(), String> {
         let path = self.lock().items.iter().find(|i| i.id == id).and_then(|i| i.final_path.clone());
-        if let Some(p) = path {
-            util::open_path(Path::new(&p));
-        }
+        let path = path.ok_or_else(|| t("The file is no longer there."))?;
+        util::open_path(Path::new(&path))
     }
 
     pub fn reveal(&self, id: Uuid) {

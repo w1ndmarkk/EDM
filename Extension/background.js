@@ -80,8 +80,36 @@ async function useGlobalBadgeOnAllTabs(on) {
     }
   } catch {}
 }
+// Files handed to EDM, so one that EDM cannot fetch (the site's bot check, such as Cloudflare's, admits only the
+// browser that passed it) goes back to the browser. Kept in session storage: the worker may restart meanwhile.
+async function readHandedOver() {
+  try { return (await api.storage.session.get('handedOver')).handedOver || {}; } catch { return {}; }
+}
+async function rememberHandOver(id, url) {
+  if (!id) return;
+  const map = await readHandedOver();
+  map[id] = { url, time: Date.now() };
+  const ids = Object.keys(map).sort((a, b) => map[a].time - map[b].time);
+  while (ids.length > 50) delete map[ids.shift()];
+  try { await api.storage.session.set({ handedOver: map }); } catch {}
+}
+async function takeBack(list) {
+  const back = list.filter((i) => i.handback);
+  if (!back.length) return;
+  const map = await readHandedOver();
+  for (const i of back) {
+    const h = map[i.id];
+    if (!h) continue; // not one of ours (added in the app)
+    delete map[i.id];
+    try { await api.storage.session.set({ handedOver: map }); } catch {}
+    try { await api.downloads.download({ url: h.url, saveAs: false }); } catch {}
+    downloadAction(i.id, 'remove');
+  }
+}
+
 async function tickProgress() {
   const list = await getDownloads();
+  await takeBack(list);
   const active = list.filter((i) => ACTIVE_STATES.has(i.state));
   if (active.length) {
     const measurable = active.filter((i) => i.total > 0);
@@ -140,14 +168,21 @@ let lastAppFailure = 0;
 
 // No notification when a download starts: the app's download window is the confirmation. Only a failure to reach
 // the app is reported, and not for the in-page panel, which says so itself.
-async function sendToApp({ url, filename, referer, kind, format, audio, title, manifest, quiet }) {
+async function sendToApp({ url, filename, referer, kind, format, audio, title, manifest, quiet, headers }) {
   const settings = await getSettings();
   // A blob: playlist travels as text; its segments live on the page's server (and so do its cookies).
   const cookieUrl = /^https?:/i.test(url) ? url : referer;
   const ck = cookieUrl ? await cookiesFor(cookieUrl) : { header: '', list: [] };
+  // The browser's own request headers win where it sent them (exact Cookie, Referer and User-Agent).
+  const extra = {};
+  for (const [k, v] of Object.entries(headers || {})) if (!/^(cookie|referer|user-agent)$/i.test(k)) extra[k] = v;
+  // With the browser's headers, its Referer exactly (none when it sent none); never an extension or about: address.
+  const ref = headers ? headerOf(headers, 'referer') : referer;
   const payload = {
-    url, filename: filename || '', referer: referer || '', kind: kind || 'file',
-    userAgent: navigator.userAgent, cookieHeader: ck.header, cookies: ck.list,
+    url, filename: filename || '', referer: /^https?:/i.test(ref || '') ? ref : '', kind: kind || 'file',
+    userAgent: headerOf(headers, 'user-agent') || navigator.userAgent,
+    cookieHeader: headerOf(headers, 'cookie') || ck.header, cookies: ck.list,
+    headers: Object.keys(extra).length ? extra : null,
     format: format || null, audio: audio || null, title: title || null, manifest: manifest || null,
   };
   try {
@@ -157,6 +192,7 @@ async function sendToApp({ url, filename, referer, kind, format, audio, title, m
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'app error');
     lastAppFailure = 0;
+    if (kind !== 'video') rememberHandOver(j.id, url);
     startProgress();
     return { ok: true };
   } catch (e) {
@@ -220,18 +256,94 @@ async function decide(url, filename) {
 }
 const tooSmall = (settings, bytes) => settings.minSizeMB > 0 && bytes > 0 && bytes < settings.minSizeMB * 1024 * 1024;
 
+// ---------- The browser's own request headers ----------
+// Sites behind bot protection (Cloudflare) let a request through when it looks like the browser's: same User-Agent
+// and the headers that go with it (Accept, Accept-Language, sec-ch-ua, sec-fetch-*). EDM repeats the headers the
+// browser sent for the file, as IDM does. Kept for a few minutes per address; each tab's last page load serves as
+// the pattern for a link click, whose request the browser never sent.
+const sentHeaders = new Map(); // url -> { headers, time }
+const pageHeaders = new Map(); // tabId -> headers of the tab's last page load
+// Set by EDM itself, or meaningless for its segmented requests.
+const NOT_FORWARDED = /^(host|connection|keep-alive|proxy-.*|content-length|transfer-encoding|te|upgrade|range|if-.*|accept-encoding|cache-control|pragma|priority)$/i;
+function keepHeaders(list) {
+  const out = {};
+  for (const h of list || []) {
+    if (h && h.name && typeof h.value === 'string' && !NOT_FORWARDED.test(h.name)) out[h.name] = h.value;
+  }
+  return out;
+}
+if (api.webRequest?.onSendHeaders) {
+  // Chrome shows Cookie and Referer only with "extraHeaders"; Firefox shows everything and rejects that option.
+  const options = BROWSER === 'firefox' ? ['requestHeaders'] : ['requestHeaders', 'extraHeaders'];
+  try {
+    api.webRequest.onSendHeaders.addListener((d) => {
+      if (d.tabId < 0) return;
+      const headers = keepHeaders(d.requestHeaders);
+      sentHeaders.delete(d.url);
+      sentHeaders.set(d.url, { headers, time: Date.now() });
+      while (sentHeaders.size > 60) sentHeaders.delete(sentHeaders.keys().next().value);
+      if (d.type === 'main_frame') pageHeaders.set(d.tabId, headers);
+    }, { urls: ['<all_urls>'], types: ['main_frame', 'sub_frame'] }, options);
+  } catch { /* EDM falls back to its own few headers */ }
+}
+api.tabs.onRemoved.addListener((tabId) => pageHeaders.delete(tabId));
+
+const headerOf = (headers, name) => {
+  const key = Object.keys(headers || {}).find((k) => k.toLowerCase() === name);
+  return key ? headers[key] : '';
+};
+// "a.b.example.com" → "example.com" (close enough for sec-fetch-site; no public-suffix list here).
+const siteOf = (host) => host.split('.').slice(-2).join('.');
+
+/** The headers the browser sent for this address, or the tab's page load re-aimed at it (a link click on `from`). */
+function browserHeaders(url, tabId, from) {
+  const hit = sentHeaders.get(url);
+  if (hit && Date.now() - hit.time < 5 * 60 * 1000) return hit.headers;
+  const page = tabId != null ? pageHeaders.get(tabId) : null;
+  if (!page) return null;
+  const h = {};
+  for (const [k, v] of Object.entries(page)) if (!/^(cookie|referer)$/i.test(k)) h[k] = v;
+  const fetchSite = Object.keys(h).find((k) => k.toLowerCase() === 'sec-fetch-site');
+  if (fetchSite) {
+    // The click is a navigation from the page to the file.
+    let site = 'cross-site';
+    try {
+      const a = new URL(from), b = new URL(url);
+      site = a.origin === b.origin ? 'same-origin' : siteOf(a.hostname) === siteOf(b.hostname) ? 'same-site' : 'cross-site';
+    } catch { /* keep cross-site */ }
+    h[fetchSite] = site;
+  }
+  // The Referer a browser sends for the click (default policy "strict-origin-when-cross-origin"): the page address
+  // on the same origin, only its origin elsewhere, nothing from HTTPS to HTTP.
+  try {
+    const a = new URL(from), b = new URL(url);
+    if (/^https?:$/.test(a.protocol) && !(a.protocol === 'https:' && b.protocol === 'http:')) {
+      h.Referer = a.origin === b.origin ? a.href : a.origin + '/';
+    }
+  } catch { /* no referer */ }
+  return h;
+}
+
 /** The app takes the download; when it is not running, the browser downloads the file after all. */
-async function handOver(url, filename, referer) {
-  const r = await sendToApp({ url, filename, referer, kind: 'file', quiet: true });
+async function handOver(url, filename, referer, headers) {
+  const r = await sendToApp({ url, filename, referer, kind: 'file', quiet: true, headers });
   if (!r.ok) {
     try { await api.downloads.download({ url, saveAs: false }); } catch {}
   }
   return r.ok;
 }
 
+/** A bot-check page instead of the file (mirrors segmented::bot_check in the app). */
+function isBotCheck(resp) {
+  if (resp.headers.get('cf-mitigated')) return true;
+  const server = (resp.headers.get('server') || '').toLowerCase();
+  return (resp.status === 403 || resp.status === 503) && /text\/html/i.test(resp.headers.get('content-type') || '')
+    && /cloudflare|ddos-guard/.test(server);
+}
+
 // 1) A click on a download link (content.js): taken before the browser sends the request at all. A HEAD request
 //    (headers only) tells a file from a page with a file-like address, such as GitHub's ".../blob/x.zip" view.
-async function takeLink(msg) {
+async function takeLink(msg, tabId) {
   const settings = await getSettings();
   if (!settings.intercept) return { navigate: true };
   let head = null;
@@ -243,13 +355,16 @@ async function takeLink(msg) {
   } catch { /* no answer to HEAD: trust the address */ }
   // Not there: the browser shows the server's answer (a 403 or 405 can be a signed or GET-only address: trusted).
   if (head && (head.status === 404 || head.status === 410)) return { navigate: true };
+  // A bot check (Cloudflare "Just a moment…"): the browser passes it first and then asks for the file again, with
+  // the clearance cookie; that request is the one handed over (like IDM, which also takes it at that point).
+  if (head && isBotCheck(head)) return { navigate: true };
   if (head && head.ok) {
     const ct = head.headers.get('content-type') || '';
     const cd = head.headers.get('content-disposition') || '';
     if (!/^\s*attachment/i.test(cd) && /text\/html|application\/xhtml/i.test(ct)) return { navigate: true };
     if (tooSmall(settings, Number(head.headers.get('content-length') || 0))) return { navigate: true };
   }
-  await handOver(msg.url, msg.filename || '', msg.referer);
+  await handOver(msg.url, msg.filename || '', msg.referer, browserHeaders(msg.url, tabId, msg.referer));
   return { taken: true };
 }
 
@@ -269,7 +384,8 @@ async function takeResponse(d) {
   if (Date.now() - lastAppFailure < 15 * 1000) return {}; // EDM did not answer a moment ago: the browser keeps it
   if (!(await decide(d.url, filename))) return {};
   // Stop the response right away, hand it over afterwards: every millisecond spent waiting lets data through.
-  handOver(d.url, filename, d.originUrl || d.documentUrl || '').catch(() => {});
+  const from = d.originUrl || d.documentUrl || '';
+  handOver(d.url, filename, from, browserHeaders(d.url, d.tabId, from)).catch(() => {});
   return { cancel: true };
 }
 // 2a) Firefox: a page navigating to a file address (a script setting location, a redirect, a typed address) is
@@ -284,7 +400,7 @@ async function takeRequest(d) {
   if (!settings.intercept || Date.now() - lastAppFailure < 15 * 1000) return {};
   const cache = await loadRules();
   if (!cache || !EDM_RULES.capture(cache.rules, d.url, '')) return {};
-  takeLink({ url: d.url, filename: '', referer: d.originUrl || d.documentUrl || '' }).then((r) => {
+  takeLink({ url: d.url, filename: '', referer: d.originUrl || d.documentUrl || '' }, d.tabId).then((r) => {
     if (r && r.navigate) {
       passThrough.add(d.url);
       api.tabs.update(d.tabId, { url: d.url }).catch(() => {});
@@ -315,7 +431,7 @@ async function interceptDownload(item) {
 
   try { await api.downloads.cancel(item.id); } catch {}
   try { await api.downloads.erase({ id: item.id }); } catch {}
-  await handOver(url, filename, item.referrer);
+  await handOver(url, filename, item.referrer, browserHeaders(url) || browserHeaders(item.url));
   return true;
 }
 
@@ -651,7 +767,7 @@ api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'download': sendResponse(await sendToApp(msg)); break;
         case 'openPlaylist': sendResponse(await openPlaylistInApp(msg.url)); break;
         case 'takeLink': {
-          const r = await takeLink(msg);
+          const r = await takeLink(msg, sender.tab ? sender.tab.id : null);
           if (r.navigate && BROWSER === 'firefox') passThrough.add(msg.url); // content.js opens it now: no second check
           sendResponse(r);
           break;
