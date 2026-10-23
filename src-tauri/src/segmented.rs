@@ -94,11 +94,22 @@ pub struct Config {
     pub min_segment_size: i64,
     pub resume_segments: Vec<SegmentInfo>,
     pub resume_total: i64,
+    /// A form's answer: requested with POST and this body, in one stream (a form is sent once per attempt).
+    pub post_body: Option<Vec<u8>>,
 }
 
 impl Config {
     pub fn new(url: Url, headers: Vec<(String, String)>, part_path: PathBuf, segment_count: usize) -> Self {
-        Self { url, headers, part_path, segment_count, min_segment_size: 512 * 1024, resume_segments: vec![], resume_total: -1 }
+        Self {
+            url,
+            headers,
+            part_path,
+            segment_count,
+            min_segment_size: 512 * 1024,
+            resume_segments: vec![],
+            resume_total: -1,
+            post_body: None,
+        }
     }
 }
 
@@ -160,7 +171,11 @@ impl Shared {
         if let Some(r) = range.and_then(|r| HeaderValue::from_str(&r).ok()) {
             headers.insert("range", r);
         }
-        CLIENT.get(url.clone()).headers(headers)
+        match &self.cfg.post_body {
+            Some(body) => CLIENT.post(url.clone()).body(body.clone()),
+            None => CLIENT.get(url.clone()),
+        }
+        .headers(headers)
     }
 }
 
@@ -195,7 +210,11 @@ enum MultiEnd {
 
 async fn run(sh: Arc<Shared>) -> Result<(), DlError> {
     let cfg = &sh.cfg;
-    let can_resume = cfg.resume_total > 0 && !cfg.resume_segments.is_empty() && cfg.part_path.exists();
+    if cfg.post_body.is_some() {
+        // No probe: each request sends the form again, and the answer may differ (or work only once).
+        return run_single(&sh).await;
+    }
+    let can_resume =cfg.resume_total > 0 && !cfg.resume_segments.is_empty() && cfg.part_path.exists();
     if can_resume {
         *sh.segments.lock().unwrap() = cfg.resume_segments.clone();
         let file = open_file(&cfg.part_path, false, None)?;
@@ -236,6 +255,13 @@ async fn probe(sh: &Shared) -> Result<ProbeResult, DlError> {
     if !(200..300).contains(&status) {
         return Err(DlError::Failed(http_status_message(status)));
     }
+    *sh.request_url.lock().unwrap() = resp.url().clone();
+    Ok(describe(&resp))
+}
+
+/// What a response says about the file: size, Range support, name, type and the address after redirects.
+fn describe(resp: &reqwest::Response) -> ProbeResult {
+    let status = resp.status().as_u16();
     let h = resp.headers();
     let header = |name: &str| h.get(name).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
 
@@ -252,16 +278,14 @@ async fn probe(sh: &Shared) -> Result<ProbeResult, DlError> {
         let accept = header("accept-ranges").unwrap_or_default().to_lowercase();
         ranges = total > 0 && accept.contains("bytes");
     }
-    let final_url = resp.url().clone();
-    *sh.request_url.lock().unwrap() = final_url.clone();
     let content_type = header("content-type").and_then(|c| c.split(';').next().map(|s| s.trim().to_lowercase())).filter(|s| !s.is_empty());
-    Ok(ProbeResult {
+    ProbeResult {
         total_bytes: total,
         supports_ranges: ranges,
         suggested_file_name: header("content-disposition").and_then(|c| file_name_from_content_disposition(&c)),
         content_type,
-        final_url: Some(final_url.to_string()),
-    })
+        final_url: Some(resp.url().to_string()),
+    }
 }
 
 pub fn make_segments(total: i64, count: usize) -> Vec<SegmentInfo> {
@@ -321,6 +345,9 @@ enum SegOutcome {
     Retry { error: String, progressed: bool },
     /// 429/503 and friends: lower the connection count and try again later.
     Throttle(u16),
+    /// 403/421/509: while other connections of this download work, the server's limit of connections per client
+    /// (files-cdn.com allows 4, IDM keeps going with those). Otherwise the address itself is refused.
+    Refused(u16),
     /// The server ignored the Range header (200): switch to a single stream.
     Fallback,
     Fatal(String),
@@ -334,6 +361,9 @@ async fn run_multi(sh: &Arc<Shared>, file: Arc<File>) -> Result<MultiEnd, DlErro
         (0..n).filter(|&i| !segs[i].is_done()).collect()
     };
     let mut limit = seg_count;
+    // The most connections the server accepts at once; lowered when it refuses the ones beyond its limit.
+    let mut ceiling = seg_count;
+    let received_at_start = sh.current_received();
     let mut retries = vec![0u32; n];
     let mut throttled_until = Instant::now();
     let mut set: JoinSet<(usize, SegOutcome)> = JoinSet::new();
@@ -360,7 +390,7 @@ async fn run_multi(sh: &Arc<Shared>, file: Arc<File>) -> Result<MultiEnd, DlErro
                     Err(e) => return Err(DlError::Failed(e.to_string())),
                 };
                 match outcome {
-                    SegOutcome::Done => limit = (limit + 1).min(seg_count),
+                    SegOutcome::Done => limit = (limit + 1).min(ceiling),
                     SegOutcome::Retry { error, progressed } => {
                         if progressed { retries[i] = 0; }
                         retries[i] += 1;
@@ -376,6 +406,24 @@ async fn run_multi(sh: &Arc<Shared>, file: Arc<File>) -> Result<MultiEnd, DlErro
                         retries[i] += 1;
                         if retries[i] > MAX_ATTEMPTS {
                             set.shutdown().await;
+                            return Err(DlError::Failed(http_status_message(status)));
+                        }
+                        throttled_until = Instant::now() + Duration::from_secs_f64((1.5 * retries[i] as f64).min(15.0));
+                        if !pending.contains(&i) { pending.push_front(i); }
+                    }
+                    SegOutcome::Refused(_) if !set.is_empty() => {
+                        // Other connections are running: this one was over the server's limit. Not an attempt
+                        // lost; the segment waits for a free connection.
+                        ceiling = ceiling.min(set.len());
+                        limit = limit.min(ceiling);
+                        throttled_until = throttled_until.max(Instant::now() + Duration::from_secs(1));
+                        if !pending.contains(&i) { pending.push_front(i); }
+                    }
+                    SegOutcome::Refused(status) => {
+                        // Alone. Before any data the address is refused; after some, a connection that just closed
+                        // may still count on the server's side for a moment: wait and try again.
+                        retries[i] += 1;
+                        if sh.current_received() == received_at_start || retries[i] > MAX_ATTEMPTS {
                             return Err(DlError::Failed(http_status_message(status)));
                         }
                         throttled_until = Instant::now() + Duration::from_secs_f64((1.5 * retries[i] as f64).min(15.0));
@@ -421,6 +469,7 @@ async fn fetch_segment(sh: &Shared, file: &File, i: usize) -> SegOutcome {
         206 => {}
         200 => return SegOutcome::Fallback,
         s @ (408 | 425 | 429 | 500 | 502 | 503 | 504) => return SegOutcome::Throttle(s),
+        s @ (403 | 421 | 509) => return SegOutcome::Refused(s),
         s => return SegOutcome::Fatal(http_status_message(s)),
     }
     // A 206 for a different range would corrupt the file.
@@ -468,41 +517,68 @@ async fn fetch_segment(sh: &Shared, file: &File, i: usize) -> SegOutcome {
 
 // MARK: - Single-stream mode
 
+/// A single stream cannot continue where it broke (no ranges), so a broken one starts over, a few times.
+const SINGLE_ATTEMPTS: u32 = 4;
+
+enum SingleEnd {
+    /// The connection broke (timeout, error, early close): worth starting over.
+    Broken(String),
+    Stop(DlError),
+}
+
 async fn run_single(sh: &Shared) -> Result<(), DlError> {
     sh.single_mode.store(true, Ordering::Relaxed);
-    sh.single_received.store(0, Ordering::Relaxed);
     sh.segments.lock().unwrap().clear();
     let file = open_file(&sh.cfg.part_path, true, None)?;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match single_attempt(sh, &file).await {
+            Ok(()) => return Ok(()),
+            Err(SingleEnd::Stop(e)) => return Err(e),
+            Err(SingleEnd::Broken(msg)) if attempt >= SINGLE_ATTEMPTS => return Err(DlError::Failed(msg)),
+            Err(SingleEnd::Broken(_)) => tokio::time::sleep(Duration::from_secs(attempt as u64)).await,
+        }
+    }
+}
+
+async fn single_attempt(sh: &Shared, file: &File) -> Result<(), SingleEnd> {
+    sh.single_received.store(0, Ordering::Relaxed);
+    file.set_len(0).map_err(|e| SingleEnd::Stop(DlError::Failed(e.to_string())))?;
     let url = sh.request_url.lock().unwrap().clone();
     let mut resp = match timeout(REQUEST_TIMEOUT, sh.request(&url, None).send()).await {
-        Err(_) => return Err(DlError::Failed(t("The connection timed out"))),
-        Ok(Err(e)) => return Err(DlError::Failed(error_text(&e))),
+        Err(_) => return Err(SingleEnd::Broken(t("The connection timed out"))),
+        Ok(Err(e)) => return Err(SingleEnd::Broken(error_text(&e))),
         Ok(Ok(r)) => r,
     };
     let status = resp.status().as_u16();
     if bot_check(&resp) {
-        return Err(DlError::BrowserOnly);
+        return Err(SingleEnd::Stop(DlError::BrowserOnly));
     }
     if !(200..300).contains(&status) {
-        return Err(DlError::Failed(http_status_message(status)));
+        return Err(SingleEnd::Stop(DlError::Failed(http_status_message(status))));
+    }
+    if sh.cfg.post_body.is_some() {
+        // A form's answer had no probe: this response names the file. One stream, so no ranges.
+        (sh.sink)(Event::Probe(ProbeResult { supports_ranges: false, ..describe(&resp) }));
     }
     // The real GET may differ from the probe (dynamic responses); trust its Content-Length.
     let total = resp.content_length().map(|n| n as i64).unwrap_or(-1);
     let mut received: i64 = 0;
     loop {
         let chunk = match timeout(READ_TIMEOUT, resp.chunk()).await {
-            Err(_) => return Err(DlError::Failed(t("The connection timed out"))),
-            Ok(Err(e)) => return Err(DlError::Failed(error_text(&e))),
+            Err(_) => return Err(SingleEnd::Broken(t("The connection timed out"))),
+            Ok(Err(e)) => return Err(SingleEnd::Broken(error_text(&e))),
             Ok(Ok(None)) => break,
             Ok(Ok(Some(c))) => c,
         };
-        write_all_at(&file, &chunk, received as u64).map_err(|e| DlError::Failed(e.to_string()))?;
+        write_all_at(file, &chunk, received as u64).map_err(|e| SingleEnd::Stop(DlError::Failed(e.to_string())))?;
         received += chunk.len() as i64;
         sh.single_received.store(received, Ordering::Relaxed);
         sh.report(false);
     }
     if total > 0 && received < total {
-        return Err(DlError::Failed(tf!("Connection closed early ({0}/{1} bytes)", received, total)));
+        return Err(SingleEnd::Broken(tf!("Connection closed early ({0}/{1} bytes)", received, total)));
     }
     Ok(())
 }
@@ -550,6 +626,9 @@ pub fn file_name_from_content_disposition(header: &str) -> Option<String> {
     }
     PLAIN.captures(header).map(|c| c[1].trim().to_string()).filter(|v| !v.is_empty())
 }
+
+#[cfg(test)]
+mod scenarios;
 
 #[cfg(test)]
 mod tests {

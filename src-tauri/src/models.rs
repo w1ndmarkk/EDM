@@ -85,6 +85,8 @@ pub struct DownloadItem {
     pub stalled_since: Option<i64>,
     /// Folder inside the category folder (a playlist's name: Video\<playlist>).
     pub subfolder: Option<String>,
+    /// A form's answer (base64 body): requested with POST and this body, as the browser did.
+    pub post_body: Option<String>,
 
     // Not persisted.
     #[serde(skip)]
@@ -127,6 +129,7 @@ impl Default for DownloadItem {
             temp_paths: vec![],
             stalled_since: None,
             subfolder: None,
+            post_body: None,
             speed: 0.0,
             log: String::new(),
             stage: String::new(),

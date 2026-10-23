@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use regex::Regex;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -63,6 +65,8 @@ pub struct NewDownload {
     pub subfolder: Option<String>,
     /// Batch adds (playlists): no download window per item.
     pub quiet: bool,
+    /// A form's answer: the form's body (base64), sent again with POST.
+    pub post_body: Option<String>,
 }
 
 /// Partial data of a paused or failed download is deleted when it is not resumed within this time.
@@ -294,6 +298,7 @@ impl Store {
             audio_format: req.audio_format.clone().filter(|a| matches!(a.as_str(), "m4a" | "mp3")),
             output_title: req.title.as_deref().map(str::trim).filter(|t| !t.is_empty()).map(sanitize),
             subfolder: req.subfolder.as_deref().map(folder_name).filter(|s| !s.is_empty()),
+            post_body: req.post_body.filter(|_| req.kind == DownloadKind::File),
             ..Default::default()
         };
         if let Some(t) = item.output_title.clone().filter(|_| req.kind == DownloadKind::Video) {
@@ -363,6 +368,7 @@ impl Store {
         let count = if item.requested_segments > 0 { item.requested_segments } else { settings.segment_count };
         let headers = item.headers.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let mut cfg = segmented::Config::new(url, headers, part, count as usize);
+        cfg.post_body = item.post_body.as_deref().and_then(|b| BASE64.decode(b).ok());
         if resumable {
             cfg.resume_segments = item.segments.clone();
             cfg.resume_total = item.total_bytes;

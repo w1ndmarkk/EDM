@@ -85,10 +85,10 @@ async function useGlobalBadgeOnAllTabs(on) {
 async function readHandedOver() {
   try { return (await api.storage.session.get('handedOver')).handedOver || {}; } catch { return {}; }
 }
-async function rememberHandOver(id, url) {
+async function rememberHandOver(id, url, form) {
   if (!id) return;
   const map = await readHandedOver();
-  map[id] = { url, time: Date.now() };
+  map[id] = { url, form, time: Date.now() };
   const ids = Object.keys(map).sort((a, b) => map[a].time - map[b].time);
   while (ids.length > 50) delete map[ids.shift()];
   try { await api.storage.session.set({ handedOver: map }); } catch {}
@@ -102,7 +102,7 @@ async function takeBack(list) {
     if (!h) continue; // not one of ours (added in the app)
     delete map[i.id];
     try { await api.storage.session.set({ handedOver: map }); } catch {}
-    try { await api.downloads.download({ url: h.url, saveAs: false }); } catch {}
+    try { await browserDownload(h.url, h.form); } catch {}
     downloadAction(i.id, 'remove');
   }
 }
@@ -168,7 +168,7 @@ let lastAppFailure = 0;
 
 // No notification when a download starts: the app's download window is the confirmation. Only a failure to reach
 // the app is reported, and not for the in-page panel, which says so itself.
-async function sendToApp({ url, filename, referer, kind, format, audio, title, manifest, quiet, headers }) {
+async function sendToApp({ url, filename, referer, kind, format, audio, title, manifest, quiet, headers, post }) {
   const settings = await getSettings();
   // A blob: playlist travels as text; its segments live on the page's server (and so do its cookies).
   const cookieUrl = /^https?:/i.test(url) ? url : referer;
@@ -184,6 +184,8 @@ async function sendToApp({ url, filename, referer, kind, format, audio, title, m
     cookieHeader: headerOf(headers, 'cookie') || ck.header, cookies: ck.list,
     headers: Object.keys(extra).length ? extra : null,
     format: format || null, audio: audio || null, title: title || null, manifest: manifest || null,
+    // A form's answer: EDM sends the form again (Content-Type is among `headers`).
+    method: post ? 'POST' : null, body: post ? base64(post.bytes) : null,
   };
   try {
     const r = await fetch(base(settings) + '/download', {
@@ -192,7 +194,7 @@ async function sendToApp({ url, filename, referer, kind, format, audio, title, m
     const j = await r.json();
     if (!j.ok) throw new Error(j.error || 'app error');
     lastAppFailure = 0;
-    if (kind !== 'video') rememberHandOver(j.id, url);
+    if (kind !== 'video') rememberHandOver(j.id, url, formText(post));
     startProgress();
     return { ok: true };
   } catch (e) {
@@ -263,6 +265,13 @@ const tooSmall = (settings, bytes) => settings.minSizeMB > 0 && bytes > 0 && byt
 // the pattern for a link click, whose request the browser never sent.
 const sentHeaders = new Map(); // url -> { headers, time }
 const pageHeaders = new Map(); // tabId -> headers of the tab's last page load
+// Files that answer a form sent with POST (uupdump's "Download"): asking the address again with GET gets something
+// else, usually the page itself. EDM sends the same form again instead, as IDM does: its body and headers are kept.
+const forms = new Map(); // url -> { time, body: webRequest requestBody, headers }
+const formOf = (url) => {
+  const f = forms.get(url);
+  return f && Date.now() - f.time < 5 * 60 * 1000 ? f : null;
+};
 // Set by EDM itself, or meaningless for its segmented requests.
 const NOT_FORWARDED = /^(host|connection|keep-alive|proxy-.*|content-length|transfer-encoding|te|upgrade|range|if-.*|accept-encoding|cache-control|pragma|priority)$/i;
 function keepHeaders(list) {
@@ -278,6 +287,12 @@ if (api.webRequest?.onSendHeaders) {
   try {
     api.webRequest.onSendHeaders.addListener((d) => {
       if (d.tabId < 0) return;
+      if (d.method !== 'GET') {
+        const form = forms.get(d.url);
+        if (form) form.headers = keepHeaders(d.requestHeaders);
+        return;
+      }
+      forms.delete(d.url);
       const headers = keepHeaders(d.requestHeaders);
       sentHeaders.delete(d.url);
       sentHeaders.set(d.url, { headers, time: Date.now() });
@@ -287,6 +302,73 @@ if (api.webRequest?.onSendHeaders) {
   } catch { /* EDM falls back to its own few headers */ }
 }
 api.tabs.onRemoved.addListener((tabId) => pageHeaders.delete(tabId));
+if (api.webRequest?.onBeforeRequest) {
+  try {
+    api.webRequest.onBeforeRequest.addListener((d) => {
+      if (d.tabId < 0 || d.method !== 'POST') return;
+      forms.delete(d.url);
+      forms.set(d.url, { time: Date.now(), body: d.requestBody || null, headers: null });
+      while (forms.size > 20) forms.delete(forms.keys().next().value);
+    }, { urls: ['<all_urls>'], types: ['main_frame', 'sub_frame'] }, ['requestBody']);
+  } catch { /* form answers fall back to an address-only handover */ }
+}
+
+/**
+ * The form's body as the browser sent it: { bytes, type }. Null when it cannot be sent again: a file upload, whose
+ * contents the browser does not show, or a body the browser did not report.
+ */
+function formBody(form) {
+  const rb = form.body;
+  if (!rb || rb.error) return null;
+  const type = headerOf(form.headers, 'content-type');
+  if (rb.raw) {
+    if (rb.raw.some((p) => !p.bytes)) return null;
+    const parts = rb.raw.map((p) => new Uint8Array(p.bytes));
+    const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of parts) { bytes.set(p, at); at += p.length; }
+    return { bytes, type: type || 'application/octet-stream' };
+  }
+  if (!rb.formData) return null;
+  const fields = Object.entries(rb.formData).flatMap(([name, values]) => values.map((v) => [name, String(v)]));
+  if (/^multipart\/form-data/i.test(type)) {
+    // The browser shows the fields, not the bytes: written again with a boundary of our own.
+    const boundary = '----EDMFormBoundary' + Math.random().toString(36).slice(2);
+    let text = '';
+    for (const [name, value] of fields) {
+      text += `--${boundary}\r\nContent-Disposition: form-data; name="${name.replace(/"/g, '%22')}"\r\n\r\n${value}\r\n`;
+    }
+    text += `--${boundary}--\r\n`;
+    return { bytes: new TextEncoder().encode(text), type: 'multipart/form-data; boundary=' + boundary };
+  }
+  return { bytes: new TextEncoder().encode(new URLSearchParams(fields).toString()), type: 'application/x-www-form-urlencoded' };
+}
+/** The headers the browser sent with the form, with the Content-Type that goes with `post`. */
+function formHeaders(form, post) {
+  const h = {};
+  for (const [k, v] of Object.entries(form.headers || {})) if (!/^content-type$/i.test(k)) h[k] = v;
+  h['Content-Type'] = post.type;
+  return h;
+}
+function base64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+/**
+ * The browser downloads the address itself (EDM not running, or only the browser passes the site's check); a form's
+ * answer with the form sent again. `form` is { text, type }.
+ */
+async function browserDownload(url, form) {
+  if (!form) return api.downloads.download({ url, saveAs: false });
+  const opts = { url, saveAs: false, method: 'POST', body: form.text };
+  try {
+    return await api.downloads.download({ ...opts, headers: [{ name: 'Content-Type', value: form.type }] });
+  } catch {
+    return api.downloads.download(opts); // a browser that sets Content-Type itself
+  }
+}
+const formText = (post) => (post ? { text: new TextDecoder().decode(post.bytes), type: post.type } : null);
 
 const headerOf = (headers, name) => {
   const key = Object.keys(headers || {}).find((k) => k.toLowerCase() === name);
@@ -325,10 +407,10 @@ function browserHeaders(url, tabId, from) {
 }
 
 /** The app takes the download; when it is not running, the browser downloads the file after all. */
-async function handOver(url, filename, referer, headers) {
-  const r = await sendToApp({ url, filename, referer, kind: 'file', quiet: true, headers });
+async function handOver(url, filename, referer, headers, post) {
+  const r = await sendToApp({ url, filename, referer, kind: 'file', quiet: true, headers, post });
   if (!r.ok) {
-    try { await api.downloads.download({ url, saveAs: false }); } catch {}
+    try { await browserDownload(url, formText(post)); } catch {}
   }
   return r.ok;
 }
@@ -371,7 +453,11 @@ async function takeLink(msg, tabId) {
 // 2) Firefox: every other download (scripts, redirects, typed addresses) is stopped at its response headers,
 //    before the body arrives. Firefox still allows blocking webRequest; Chrome does not.
 async function takeResponse(d) {
-  if (d.tabId < 0 || d.method !== 'GET' || d.statusCode < 200 || d.statusCode >= 300 || !/^https?:/i.test(d.url)) return {};
+  if (d.tabId < 0 || d.statusCode < 200 || d.statusCode >= 300 || !/^https?:/i.test(d.url)) return {};
+  // A form's answer is taken when the form can be sent again; other methods stay with the browser.
+  const form = d.method === 'POST' ? formOf(d.url) : null;
+  const post = form ? formBody(form) : null;
+  if (d.method !== 'GET' && !post) return {};
   const cd = headerVal(d.responseHeaders, 'content-disposition');
   const ct = headerVal(d.responseHeaders, 'content-type');
   const filename = EDM_RULES.dispositionName(cd);
@@ -385,7 +471,8 @@ async function takeResponse(d) {
   if (!(await decide(d.url, filename))) return {};
   // Stop the response right away, hand it over afterwards: every millisecond spent waiting lets data through.
   const from = d.originUrl || d.documentUrl || '';
-  handOver(d.url, filename, from, browserHeaders(d.url, d.tabId, from)).catch(() => {});
+  const headers = post ? formHeaders(form, post) : browserHeaders(d.url, d.tabId, from);
+  handOver(d.url, filename, from, headers, post).catch(() => {});
   return { cancel: true };
 }
 // 2a) Firefox: a page navigating to a file address (a script setting location, a redirect, a typed address) is
@@ -422,6 +509,11 @@ async function interceptDownload(item) {
   if (item.byExtensionId) return false; // ours: handOver's fallback, the popup
   const url = item.finalUrl || item.url;
   if (!/^https?:/i.test(url)) return false;
+  // A form's answer (the address the form was sent to; a redirect after it is followed by EDM as by the browser).
+  const formUrl = [item.url, url].find(formOf);
+  const form = formUrl ? formOf(formUrl) : null;
+  const post = form ? formBody(form) : null;
+  if (form && !post) return false; // a file upload: the form cannot be sent again, the browser keeps it
   const settings = await getSettings();
   if (!settings.intercept || tooSmall(settings, item.totalBytes)) return false;
   // EDM did not answer a moment ago: cancelling would only make the browser start over.
@@ -431,7 +523,8 @@ async function interceptDownload(item) {
 
   try { await api.downloads.cancel(item.id); } catch {}
   try { await api.downloads.erase({ id: item.id }); } catch {}
-  await handOver(url, filename, item.referrer, browserHeaders(url) || browserHeaders(item.url));
+  if (post) await handOver(formUrl, filename, item.referrer, formHeaders(form, post), post);
+  else await handOver(url, filename, item.referrer, browserHeaders(url) || browserHeaders(item.url));
   return true;
 }
 

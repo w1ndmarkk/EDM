@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter};
@@ -262,6 +264,16 @@ impl Server {
                 let Ok(body) = serde_json::from_slice::<DownloadBody>(&req.body) else {
                     return (400, json!({"ok": false, "error": "invalid url"}));
                 };
+                let post_body = match body.method.as_deref() {
+                    Some(m) if m.eq_ignore_ascii_case("POST") => {
+                        let b = body.body.unwrap_or_default();
+                        if BASE64.decode(&b).is_err() {
+                            return (400, json!({"ok": false, "error": "invalid body"}));
+                        }
+                        Some(b)
+                    }
+                    _ => None,
+                };
                 let req = NewDownload {
                     url: body.url,
                     file_name: body.filename,
@@ -276,6 +288,7 @@ impl Server {
                     audio_format: body.audio,
                     title: body.title,
                     manifest: body.manifest,
+                    post_body,
                     ..Default::default()
                 };
                 match self.store.add(req) {
@@ -402,6 +415,11 @@ struct DownloadBody {
     /// Video: playlist text of a stream the page played from a blob: URL.
     #[serde(default)]
     manifest: Option<String>,
+    /// "POST" for a form's answer, sent again with `body` (base64; its Content-Type is among `headers`).
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
 }
 
 #[derive(Deserialize)]
