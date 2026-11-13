@@ -315,5 +315,6 @@
   "Could not check for a newer version.": "Yeni sürüm denetlenemedi.",
   "The site's bot check lets only the browser download this file.": "Sitenin bot doğrulaması bu dosyayı yalnızca tarayıcının indirmesine izin veriyor.",
   "The file is no longer there.": "Dosya artık yerinde değil.",
-  "Could not open the file: {0}": "Dosya açılamadı: {0}"
+  "Could not open the file: {0}": "Dosya açılamadı: {0}",
+  "Reconnecting…": "Yeniden bağlanılıyor…"
 }

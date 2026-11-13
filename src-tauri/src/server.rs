@@ -225,6 +225,10 @@ impl Server {
                 let Ok(body) = serde_json::from_slice::<FormatsBody>(&req.body) else {
                     return (400, json!({"ok": false, "error": "invalid request"}));
                 };
+                // The address becomes a yt-dlp argument: only a web address, never something read as an option.
+                if !reqwest::Url::parse(&body.url).is_ok_and(|u| matches!(u.scheme(), "http" | "https")) {
+                    return (400, json!({"ok": false, "error": "invalid url"}));
+                }
                 match self.formats(body, &settings).await {
                     Ok(list) => (200, json!({"ok": true, "extractor": list.extractor, "title": list.title, "duration": list.duration, "formats": list.options})),
                     Err(e) => (200, json!({"ok": false, "error": e})),

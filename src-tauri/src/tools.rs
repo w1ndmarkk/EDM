@@ -209,6 +209,7 @@ impl Tools {
                     me.set(|s| s.progress = received as f64 / t as f64);
                 }
             }
+            Event::Reconnecting => {}
         })
         .await
         .map_err(|e| e.to_string())

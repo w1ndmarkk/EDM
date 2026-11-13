@@ -156,10 +156,26 @@ impl Store {
     pub fn start_background(self: &Arc<Self>) {
         let s = self.clone();
         tauri::async_runtime::spawn(async move {
+            // The whole list ("items") goes out when downloads were added, removed or reordered, and now and then
+            // so a window that missed something catches up; otherwise only the downloads that changed
+            // ("items-changed"), so a long history is not sent and redrawn several times a second.
+            let mut last: Vec<ItemView> = vec![];
+            let mut since_full = 0u32;
             loop {
                 s.changed.notified().await;
                 tokio::time::sleep(Duration::from_millis(120)).await;
-                let _ = s.app.emit("items", s.views());
+                let views = s.views();
+                since_full += 1;
+                if since_full >= 50 || !same_downloads(&views, &last) {
+                    since_full = 0;
+                    let _ = s.app.emit("items", &views);
+                } else {
+                    let changed = changed_items(&views, &last);
+                    if !changed.is_empty() {
+                        let _ = s.app.emit("items-changed", changed);
+                    }
+                }
+                last = views;
             }
         });
         let s = self.clone();
@@ -310,6 +326,11 @@ impl Store {
         if req.kind == DownloadKind::Video && !req.cookies.is_empty() {
             item.cookie_file = write_cookie_file(&req.cookies, item.id);
         }
+        if !settings.auto_start {
+            // "Start new downloads immediately" is off: it waits, paused, for Resume or Start Queue. Left queued,
+            // it would start by itself as soon as another download finished.
+            item.state = DownloadState::Paused;
+        }
         let _ = std::fs::create_dir_all(&item.directory);
         {
             let mut inner = self.lock();
@@ -372,6 +393,8 @@ impl Store {
         if resumable {
             cfg.resume_segments = item.segments.clone();
             cfg.resume_total = item.total_bytes;
+            cfg.resume_etag = item.etag.clone();
+            cfg.resume_last_modified = item.last_modified.clone();
         }
         let generation = inner.next_generation();
         let cancel = CancellationToken::new();
@@ -381,6 +404,7 @@ impl Store {
             it.state = if resumable { DownloadState::Downloading } else { DownloadState::Probing };
             it.error_message = None;
             it.speed = 0.0;
+            it.stage.clear();
             if !resumable {
                 it.received_bytes = 0;
                 it.segments.clear();
@@ -403,7 +427,15 @@ impl Store {
             let item = &mut inner.items[idx];
             match ev {
                 Event::Probe(p) => Self::apply_probe(item, p),
+                // The status says so and the speed drops to zero, instead of a decaying speed with an absurd time left.
+                Event::Reconnecting => {
+                    item.stage = t("Reconnecting…");
+                    item.speed = 0.0;
+                }
                 Event::Progress(received, segments) => {
+                    if received != item.received_bytes {
+                        item.stage.clear(); // data arrives again
+                    }
                     item.received_bytes = received;
                     item.segments = segments;
                     if item.state == DownloadState::Probing {
@@ -418,6 +450,8 @@ impl Store {
     fn apply_probe(item: &mut DownloadItem, p: ProbeResult) {
         item.total_bytes = p.total_bytes;
         item.supports_ranges = p.supports_ranges;
+        item.etag = p.etag.clone();
+        item.last_modified = p.last_modified.clone();
         if item.state == DownloadState::Probing {
             item.state = DownloadState::Downloading;
         }
@@ -450,6 +484,7 @@ impl Store {
             }
             inner.tasks.remove(&id);
             let Some(idx) = inner.index(id) else { return };
+            inner.items[idx].stage.clear();
             match result {
                 Ok(()) => {
                     let item = &mut inner.items[idx];
@@ -466,6 +501,9 @@ impl Store {
                             item.speed = 0.0;
                             if item.total_bytes <= 0 {
                                 item.total_bytes = item.received_bytes;
+                            }
+                            if let Some(f) = forget_credentials(item) {
+                                let _ = std::fs::remove_file(f);
                             }
                             completed = Some(item.clone());
                         }
@@ -705,9 +743,11 @@ impl Store {
                     item.completed_at = Some(util::now_ms());
                     item.speed = 0.0;
                     // yt-dlp removed its intermediate files itself; only the (empty) temp folder is left.
-                    let dirs: Vec<PathBuf> = item.temp_paths.drain(..).map(PathBuf::from).filter(|p| {
+                    let mut dirs: Vec<PathBuf> = item.temp_paths.drain(..).map(PathBuf::from).filter(|p| {
                         p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(".edm-"))
                     }).collect();
+                    // The browser's cookies for this video go with them.
+                    dirs.extend(forget_credentials(item));
                     tauri::async_runtime::spawn(delete_files(dirs));
                     if let Some(path) = path {
                         let p = PathBuf::from(&path);
@@ -874,6 +914,9 @@ impl Store {
         let (pid, leftovers) = {
             let mut inner = self.lock();
             let Some(idx) = inner.index(id) else { return };
+            if inner.items[idx].state == DownloadState::Completed {
+                return; // nothing to cancel (a finished item in a mixed selection)
+            }
             let pid = Self::stop_task(&inner, id);
             inner.tasks.remove(&id);
             let leftovers = leftover_files(&inner.items[idx], &completed_paths(&inner.items));
@@ -1019,7 +1062,13 @@ impl Store {
                     let dt = now.duration_since(*time).as_secs_f64();
                     if dt > 0.0 {
                         let inst = ((item.received_bytes - bytes) as f64 / dt).max(0.0);
-                        let new = if item.speed == 0.0 { inst } else { item.speed * 0.6 + inst * 0.4 };
+                        let new = if !item.stage.is_empty() {
+                            0.0 // reconnecting
+                        } else if item.speed == 0.0 {
+                            inst
+                        } else {
+                            item.speed * 0.6 + inst * 0.4
+                        };
                         speed_changed |= (new - item.speed).abs() > 1.0;
                         item.speed = new;
                     }
@@ -1077,19 +1126,45 @@ impl Store {
 
     fn load(&self) {
         let Ok(data) = std::fs::read(&self.path) else { return };
-        let Ok(mut items) = serde_json::from_slice::<Vec<DownloadItem>>(&data) else { return };
+        let mut items = match serde_json::from_slice::<Vec<DownloadItem>>(&data) {
+            Ok(items) => items,
+            Err(e) => {
+                // An unreadable list is kept aside: the next save would overwrite it with an empty one.
+                let kept = self.path.with_file_name("downloads.damaged.json");
+                let _ = std::fs::copy(&self.path, &kept);
+                eprintln!("download list unreadable ({e}); kept as {}", kept.display());
+                return;
+            }
+        };
+        let mut cleaned = false;
         for item in items.iter_mut() {
             if item.state.is_active() || item.state == DownloadState::Queued {
                 item.state = DownloadState::Paused;
             }
+            // Lists written by earlier versions kept the credentials of finished downloads.
+            if item.state == DownloadState::Completed && has_credentials(item) {
+                if let Some(f) = forget_credentials(item) {
+                    let _ = std::fs::remove_file(f);
+                }
+                cleaned = true;
+            }
         }
         let known: HashSet<String> = items.iter().map(|i| format!(".dm-{}.part", i.id)).collect();
-        self.lock().items = items;
-        // Remove `.dm-<id>.part` files left behind by downloads that are no longer in the list.
+        {
+            let mut inner = self.lock();
+            inner.items = items;
+            inner.save_pending = cleaned;
+        }
+        // Remove `.dm-<id>.part` files left behind by downloads that are no longer in the list. Another copy of
+        // the app (a test build with its own data folder) may download into the same folder, and its part files
+        // are not in this list either: only the installed app cleans up, and only files untouched for a day.
+        if std::env::var_os("EDM_DATA_DIR").is_some() {
+            return;
+        }
         if let Ok(entries) = std::fs::read_dir(self.settings.get().download_dir()) {
             for e in entries.flatten() {
                 let name = e.file_name().to_string_lossy().into_owned();
-                if name.starts_with(".dm-") && name.ends_with(".part") && !known.contains(&name) {
+                if name.starts_with(".dm-") && name.ends_with(".part") && !known.contains(&name) && untouched_for_a_day(&e.path()) {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
@@ -1117,6 +1192,35 @@ impl Store {
         }
         let _ = self.app.notification().builder().title(t("Download completed")).body(&item.file_name).show();
     }
+}
+
+/// The same downloads in the same order (whatever changed inside them).
+fn same_downloads(a: &[ItemView], b: &[ItemView]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.id == y.id)
+}
+
+/// The downloads of `now` that differ from `before` (both lists hold the same downloads in the same order).
+fn changed_items<'a>(now: &'a [ItemView], before: &[ItemView]) -> Vec<&'a ItemView> {
+    now.iter().zip(before).filter(|(x, y)| x != y).map(|(x, _)| x).collect()
+}
+
+const CREDENTIAL_HEADERS: [&str; 3] = ["cookie", "authorization", "proxy-authorization"];
+
+fn has_credentials(item: &DownloadItem) -> bool {
+    item.cookie_file.is_some() || item.post_body.is_some() || item.headers.keys().any(|k| CREDENTIAL_HEADERS.contains(&k.to_lowercase().as_str()))
+}
+
+/// A finished download needs its credentials no more: the list on disk keeps no cookies, sign-ins or form data
+/// of it. Returns its cookie file, for the caller to delete.
+fn forget_credentials(item: &mut DownloadItem) -> Option<PathBuf> {
+    item.headers.retain(|k, _| !CREDENTIAL_HEADERS.contains(&k.to_lowercase().as_str()));
+    item.post_body = None;
+    item.cookie_file.take().map(PathBuf::from)
+}
+
+fn untouched_for_a_day(path: &Path) -> bool {
+    let age = std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+    age.is_some_and(|a| a.as_millis() as i64 > STALE_PARTIAL_MS)
 }
 
 pub fn write_cookie_file(cookies: &[ExtensionCookie], id: Uuid) -> Option<String> {
@@ -1354,6 +1458,21 @@ mod tests {
         assert!(manifest_path("file:///C:/Users/Public/movie.m3u8").is_none());
         assert!(manifest_path("https://cdn.example/a.m3u8").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn finished_downloads_keep_no_credentials() {
+        let mut item = DownloadItem {
+            headers: [("cookie", "sid=1"), ("Authorization", "Bearer x"), ("User-Agent", "UA"), ("Referer", "https://a.com/")]
+                .into_iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            post_body: Some("YQ==".into()),
+            cookie_file: Some(r"C:\data\cookies\x.txt".into()),
+            ..Default::default()
+        };
+        assert!(has_credentials(&item));
+        assert_eq!(forget_credentials(&mut item), Some(PathBuf::from(r"C:\data\cookies\x.txt")));
+        assert_eq!(item.headers.keys().map(String::as_str).collect::<Vec<_>>(), ["Referer", "User-Agent"]);
+        assert!(item.post_body.is_none() && item.cookie_file.is_none() && !has_credentials(&item));
     }
 
     #[test]

@@ -40,6 +40,14 @@ struct Behavior {
     /// No Content-Length: the body ends when the connection closes.
     no_length: bool,
     disposition: Option<&'static str>,
+    /// The first n probes get 429 with "Retry-After: 1" (thinkbroadband during the 2026-11-01 benchmark).
+    throttle_probe: usize,
+    last_modified: Option<&'static str>,
+    /// Another file of the same size (the file was replaced on the server).
+    salt: u8,
+    /// The connection that asks for the start of the file is several times slower than the others (a server
+    /// with uneven connections).
+    slow_first: bool,
 }
 
 #[derive(Default)]
@@ -49,20 +57,21 @@ struct Stats {
     peak_open: AtomicUsize,
     refused: AtomicUsize,
     throttled: AtomicUsize,
+    probes_throttled: AtomicUsize,
     dropped: Mutex<HashSet<usize>>,
     wrong_sent: AtomicBool,
     methods: Mutex<Vec<String>>,
 }
 
 /// Bytes that differ along the file, so a piece written at the wrong offset shows.
-fn content(size: usize) -> Vec<u8> {
-    (0..size).map(|i| (i % 251) as u8 ^ (i >> 10) as u8).collect()
+fn content(size: usize, salt: u8) -> Vec<u8> {
+    (0..size).map(|i| (i % 251) as u8 ^ (i >> 10) as u8 ^ salt).collect()
 }
 
 async fn serve(b: Behavior) -> (String, Arc<Stats>, Arc<Vec<u8>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let data = Arc::new(content(b.size));
+    let data = Arc::new(content(b.size, b.salt));
     let (b, stats) = (Arc::new(b), Arc::new(Stats::default()));
     let (b2, s2, d2) = (b.clone(), stats.clone(), data.clone());
     tokio::spawn(async move {
@@ -150,6 +159,10 @@ async fn handle(mut s: TcpStream, b: Arc<Behavior>, st: Arc<Stats>, data: Arc<Ve
     }
     let range = header("range");
     let is_probe = range == "bytes=0-0";
+    if is_probe && st.probes_throttled.load(Ordering::SeqCst) < b.throttle_probe {
+        st.probes_throttled.fetch_add(1, Ordering::SeqCst);
+        return reply(&mut s, 429, &[html[0].clone(), ("Retry-After", "1".to_string())], &page).await;
+    }
     if !is_probe && st.throttled.load(Ordering::SeqCst) < b.throttle_first {
         st.throttled.fetch_add(1, Ordering::SeqCst);
         return reply(&mut s, 429, &html, &page).await;
@@ -189,6 +202,9 @@ async fn handle(mut s: TcpStream, b: Arc<Behavior>, st: Arc<Stats>, data: Arc<Ve
     if let Some(d) = b.disposition {
         head.push_str(&format!("Content-Disposition: {d}\r\n"));
     }
+    if let Some(d) = b.last_modified {
+        head.push_str(&format!("Last-Modified: {d}\r\n"));
+    }
     head.push_str("\r\n");
     if s.write_all(head.as_bytes()).await.is_err() {
         return;
@@ -210,7 +226,8 @@ async fn handle(mut s: TcpStream, b: Arc<Behavior>, st: Arc<Stats>, data: Arc<Ve
             return;
         }
         at = to;
-        tokio::time::sleep(Duration::from_millis(1)).await;
+        let slow = b.slow_first && start == 0 && !is_probe;
+        tokio::time::sleep(Duration::from_millis(if slow { 80 } else { 1 })).await;
     }
     let _ = s.shutdown().await;
 }
@@ -221,6 +238,8 @@ struct Outcome {
     probe: Option<ProbeResult>,
     segments: Vec<SegmentInfo>,
     took: Duration,
+    /// How often the downloader said it was waiting to try again.
+    reconnects: usize,
 }
 
 async fn fetch(url: &str, setup: impl FnOnce(&mut Config)) -> Outcome {
@@ -236,6 +255,8 @@ async fn fetch_with(url: &str, setup: impl FnOnce(&mut Config), keep: Option<Pat
     let probe = Arc::new(Mutex::new(None));
     let segments = Arc::new(Mutex::new(vec![]));
     let cancel = CancellationToken::new();
+    let reconnects = Arc::new(AtomicUsize::new(0));
+    let r1 = reconnects.clone();
     let (p1, s1, c1) = (probe.clone(), segments.clone(), cancel.clone());
     let started = Instant::now();
     let result = timeout(
@@ -248,6 +269,9 @@ async fn fetch_with(url: &str, setup: impl FnOnce(&mut Config), keep: Option<Pat
                     c1.cancel();
                 }
             }
+            Event::Reconnecting => {
+                r1.fetch_add(1, Ordering::SeqCst);
+            }
         }),
     )
     .await
@@ -259,7 +283,7 @@ async fn fetch_with(url: &str, setup: impl FnOnce(&mut Config), keep: Option<Pat
     }
     let segments = segments.lock().unwrap().clone();
     let probe = probe.lock().unwrap().clone();
-    Outcome { result, file, probe, segments, took }
+    Outcome { result, file, probe, segments, took, reconnects: reconnects.load(Ordering::SeqCst) }
 }
 
 fn assert_same(o: &Outcome, data: &[u8]) {
@@ -332,7 +356,101 @@ async fn segments_break_off_and_continue() {
 #[tokio::test(flavor = "multi_thread")]
 async fn single_stream_breaks_off_and_starts_over() {
     let (base, _, data) = serve(Behavior { size: 2 * MB, drop_after: Some(300_000), ..Default::default() }).await;
-    assert_same(&fetch(&format!("{base}/file"), |_| {}).await, &data);
+    let o = fetch(&format!("{base}/file"), |_| {}).await;
+    assert_same(&o, &data);
+    assert!(o.reconnects > 0, "the wait before the second try was not reported");
+}
+
+/// thinkbroadband answered the probe with 429 (benchmark of 2026-11-01): the download failed at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn busy_probe_is_asked_again() {
+    let (base, st, data) = serve(Behavior { size: 2 * MB, ranges: true, throttle_probe: 2, ..Default::default() }).await;
+    let o = fetch(&format!("{base}/file"), |_| {}).await;
+    assert_same(&o, &data);
+    assert_eq!(st.probes_throttled.load(Ordering::SeqCst), 2);
+    assert!(o.took >= Duration::from_secs(2), "Retry-After was not waited for: {:?}", o.took);
+}
+
+/// A server that stays busy is given up on, with its status as the error.
+#[tokio::test(flavor = "multi_thread")]
+async fn busy_probe_gives_up() {
+    let (base, _, _) = serve(Behavior { size: MB, ranges: true, throttle_probe: 100, ..Default::default() }).await;
+    let o = fetch(&format!("{base}/file"), |_| {}).await;
+    assert_eq!(failed_with(&o), http_status_message(429));
+}
+
+/// One slow connection among fast ones: the fast ones, once done, take over parts of what the slow one has left.
+#[tokio::test(flavor = "multi_thread")]
+async fn free_connections_take_over_from_a_slow_one() {
+    let (base, _, data) = serve(Behavior { size: 8 * MB, ranges: true, slow_first: true, ..Default::default() }).await;
+    let o = fetch(&format!("{base}/file"), |c| {
+        c.segment_count = 4;
+        c.min_segment_size = 64 * 1024;
+    })
+    .await;
+    assert_same(&o, &data);
+    assert!(o.segments.len() > 4, "the slow segment was not split ({} segments)", o.segments.len());
+    // The pieces still cover the file exactly once.
+    let mut s = o.segments.clone();
+    s.sort_by_key(|s| s.start);
+    assert_eq!((s[0].start, s.last().unwrap().end), (0, data.len() as i64 - 1));
+    for w in s.windows(2) {
+        assert_eq!(w[0].end + 1, w[1].start);
+    }
+    assert!(s.iter().all(|s| s.received == s.length()));
+    // Alone, the slow connection needs 128 pieces x 80 ms for its 2 MB.
+    assert!(o.took < Duration::from_secs(9), "took {:?}", o.took);
+}
+
+/// One connection (Settings ▸ connections = 1) continues after a pause instead of starting over.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_connection_resumes() {
+    let (base, _, data) = serve(Behavior { size: 4 * MB, ranges: true, ..Default::default() }).await;
+    let url = format!("{base}/file");
+    let part = std::env::temp_dir().join(format!("edm-scenario-{}", Uuid::new_v4())).join("file.part");
+    let half = (data.len() / 2) as i64;
+    let first = fetch_with(&url, |c| c.segment_count = 1, Some(part.clone()), move |r| r > half).await;
+    assert!(matches!(first.result, Err(DlError::Cancelled)));
+    assert_eq!(first.segments.len(), 1, "one connection downloads as one resumable segment");
+    let done = first.segments[0].received;
+    assert!(done > 0 && done < data.len() as i64, "paused with {done} bytes");
+    let (segments, total) = (first.segments.clone(), data.len() as i64);
+    let second = fetch_with(&url, move |c| {
+        c.segment_count = 1;
+        c.resume_segments = segments;
+        c.resume_total = total;
+    }, Some(part.clone()), |_| false)
+    .await;
+    assert_same(&second, &data);
+    let _ = std::fs::remove_dir_all(part.parent().unwrap());
+}
+
+/// The file was replaced on the server between pause and resume (same size, newer date): the old half must not be
+/// kept under the new one.
+#[tokio::test(flavor = "multi_thread")]
+async fn replaced_file_starts_over() {
+    let old = Behavior { size: 12 * MB, ranges: true, last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT"), ..Default::default() };
+    let new = Behavior { salt: 0x5a, last_modified: Some("Tue, 02 Jan 2024 00:00:00 GMT"), ..old.clone() };
+    let (old_base, _, old_data) = serve(old).await;
+    let (new_base, _, new_data) = serve(new).await;
+    assert_ne!(old_data, new_data);
+    let part = std::env::temp_dir().join(format!("edm-scenario-{}", Uuid::new_v4())).join("file.part");
+    let half = (old_data.len() / 2) as i64;
+    let first = fetch_with(&format!("{old_base}/file"), |_| {}, Some(part.clone()), move |r| r > half).await;
+    assert!(matches!(first.result, Err(DlError::Cancelled)), "not paused: {:?}", first.result);
+    let date = first.probe.as_ref().unwrap().last_modified.clone();
+    assert_eq!(date.as_deref(), Some("Mon, 01 Jan 2024 00:00:00 GMT"));
+    let resume = |date: Option<String>| {
+        let (segments, total) = (first.segments.clone(), old_data.len() as i64);
+        move |c: &mut Config| {
+            c.resume_segments = segments;
+            c.resume_total = total;
+            c.resume_last_modified = date;
+        }
+    };
+    let second = fetch_with(&format!("{new_base}/file"), resume(date), Some(part.clone()), |_| false).await;
+    assert_same(&second, &new_data);
+    let _ = std::fs::remove_dir_all(part.parent().unwrap());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -407,7 +525,7 @@ async fn missing_file() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pause_and_resume() {
-    let (base, _, data) = serve(Behavior { size: 6 * MB, ranges: true, ..Default::default() }).await;
+    let (base, _, data) = serve(Behavior { size: 12 * MB, ranges: true, ..Default::default() }).await;
     let url = format!("{base}/file");
     let part = std::env::temp_dir().join(format!("edm-scenario-{}", Uuid::new_v4())).join("file.part");
     let half = (data.len() / 2) as i64;

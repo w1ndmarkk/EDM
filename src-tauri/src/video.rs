@@ -63,19 +63,47 @@ pub fn has_cookies(item_cookies: Option<&str>, host: Option<&str>) -> bool {
     item_cookies.is_some_and(|c| Path::new(c).is_file()) || site_login_matches(host)
 }
 
+const MERGED_PREFIX: &str = "merged-";
+
+/// A cookie file written for one yt-dlp run (both cookie sources in one file); deleted when the run is over,
+/// however it ends.
+#[derive(Default)]
+pub struct TempCookies(Option<PathBuf>);
+
+impl Drop for TempCookies {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// Removes merged cookie files a previous run left behind (the app was closed or killed while yt-dlp ran).
+pub fn sweep_merged_cookies() {
+    let Ok(entries) = std::fs::read_dir(crate::paths::cookies_dir()) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with(MERGED_PREFIX) && name.ends_with(".txt") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// Combines the per-download cookie file (from the browser extension) with the shared site-login cookie file.
 /// The site-login jar is only attached when the target host belongs to a domain the user signed in to.
-fn merged_cookie_file(item_cookies: Option<&str>, host: Option<&str>) -> Option<PathBuf> {
+/// Returns the file for yt-dlp and whether it is a merge written for this run.
+fn merged_cookie_file(item_cookies: Option<&str>, host: Option<&str>) -> Option<(PathBuf, bool)> {
     let item = item_cookies.map(PathBuf::from).filter(|p| p.is_file());
     let site = site_login_matches(host).then(sitelogin::cookie_file_path).flatten();
     match (item, site) {
         (None, None) => None,
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
+        (Some(a), None) => Some((a, false)),
+        (None, Some(b)) => Some((b, false)),
         (Some(a), Some(b)) => {
             let body = format!("{}\n{}", std::fs::read_to_string(&b).unwrap_or_default(), std::fs::read_to_string(&a).unwrap_or_default());
-            let tmp = std::env::temp_dir().join(format!("edm-cookies-{}.txt", uuid::Uuid::new_v4()));
-            if std::fs::write(&tmp, body).is_ok() { Some(tmp) } else { Some(a) }
+            // In the app's own cookie folder, not %TEMP%: it holds the user's sign-in.
+            let tmp = crate::paths::cookies_dir().join(format!("{MERGED_PREFIX}{}.txt", uuid::Uuid::new_v4()));
+            if std::fs::write(&tmp, body).is_ok() { Some((tmp, true)) } else { Some((a, false)) }
         }
     }
 }
@@ -152,8 +180,10 @@ pub fn approx_size(line: &str) -> Option<i64> {
 }
 
 /// ffmpeg, User-Agent/Referer, cookies and the JavaScript runtime: everything yt-dlp needs to reach the page.
-fn source_arguments(url: &str, headers: &BTreeMap<String, String>, cookie_file: Option<&str>, use_cookies: bool) -> Vec<String> {
+/// The second value keeps a merged cookie file alive: hold it until yt-dlp has exited.
+fn source_arguments(url: &str, headers: &BTreeMap<String, String>, cookie_file: Option<&str>, use_cookies: bool) -> (Vec<String>, TempCookies) {
     let mut args: Vec<String> = vec![];
+    let mut merged = TempCookies::default();
     if let Some(ff) = locate_ffmpeg() {
         args.extend(["--ffmpeg-location".into(), ff.to_string_lossy().into_owned()]);
     }
@@ -165,14 +195,22 @@ fn source_arguments(url: &str, headers: &BTreeMap<String, String>, cookie_file: 
     }
     let host = reqwest::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string));
     if use_cookies {
-        if let Some(cf) = merged_cookie_file(cookie_file, host.as_deref()) {
+        if let Some((cf, temporary)) = merged_cookie_file(cookie_file, host.as_deref()) {
             args.extend(["--cookies".into(), cf.to_string_lossy().into_owned()]);
+            if temporary {
+                merged = TempCookies(Some(cf));
+            }
         }
     }
     if let Some(deno) = locate_deno() {
         args.extend(["--js-runtimes".into(), format!("deno:{}", deno.to_string_lossy())]);
     }
-    args
+    (args, merged)
+}
+
+/// The address goes last, after "--": whatever it looks like, yt-dlp reads it as an address and not as an option.
+fn push_url(args: &mut Vec<String>, url: &str) {
+    args.extend(["--".to_string(), url.to_string()]);
 }
 
 /// A hidden-console yt-dlp process with UTF-8 output and the bundled tools on %PATH%.
@@ -248,8 +286,9 @@ pub struct Playlist {
 pub async fn list_playlist(executable: &Path, url: &str, use_cookies: bool) -> Result<Playlist, String> {
     let mut args: Vec<String> =
         ["-J", "--flat-playlist", "--yes-playlist", "--no-warnings", "--no-colors"].iter().map(|s| s.to_string()).collect();
-    args.extend(source_arguments(url, &BTreeMap::new(), None, use_cookies));
-    args.push(url.to_string());
+    let (source, _merged) = source_arguments(url, &BTreeMap::new(), None, use_cookies);
+    args.extend(source);
+    push_url(&mut args, url);
     let mut cmd = command(executable, &args);
     cmd.kill_on_drop(true);
     let out = tokio::time::timeout(Duration::from_secs(180), cmd.output())
@@ -326,8 +365,9 @@ pub async fn list_formats(
     container: &str,
 ) -> Result<FormatList, String> {
     let mut args: Vec<String> = ["-J", "--no-playlist", "--no-warnings", "--no-colors"].iter().map(|s| s.to_string()).collect();
-    args.extend(source_arguments(url, headers, cookie_file, use_cookies));
-    args.push(url.to_string());
+    let (source, _merged) = source_arguments(url, headers, cookie_file, use_cookies);
+    args.extend(source);
+    push_url(&mut args, url);
     let mut cmd = command(executable, &args);
     cmd.kill_on_drop(true);
     let out = tokio::time::timeout(std::time::Duration::from_secs(90), cmd.output())
@@ -464,8 +504,9 @@ pub fn run(
         "before_dl:MCFMT|%(resolution)s|%(ext)s|%(vcodec)s|%(acodec)s|%(filesize_approx)s|%(format_id)s|%(duration)s".into(),
     ]);
     args.extend(opts.format_args);
-    args.extend(source_arguments(opts.url, opts.headers, opts.cookie_file, opts.use_cookies));
-    args.push(opts.url.to_string());
+    let (source, merged) = source_arguments(opts.url, opts.headers, opts.cookie_file, opts.use_cookies);
+    args.extend(source);
+    push_url(&mut args, opts.url);
 
     let mut cmd = command(opts.executable, &args);
     cmd.current_dir(opts.output_dir);
@@ -479,6 +520,7 @@ pub fn run(
 
     tokio::spawn(async move {
         let status = child.wait().await;
+        drop(merged);
         // Wait for the pipes to drain, but not forever: a grandchild (ffmpeg) may keep them open.
         let _ = tokio::time::timeout(Duration::from_secs(3), async {
             if let Some(h) = out {

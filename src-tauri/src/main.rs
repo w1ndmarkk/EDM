@@ -50,6 +50,7 @@ fn main() {
                 paths::set_resource_dir(dir);
             }
             let handle = app.handle().clone();
+            video::sweep_merged_cookies();
             let settings = Arc::new(SettingsStore::load());
             let store = Store::new(handle.clone(), settings.clone());
             let tools = Arc::new(Tools::new(handle.clone()));

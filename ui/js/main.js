@@ -34,6 +34,7 @@ async function init() {
   renderStatus();
 
   listen('items', (items) => { state.items = items; refresh(); });
+  listen('items-changed', applyChanged);
   listen('server', (s) => { state.server = s; renderStatus(); });
   listen('settings', (s) => { state.settings = s; onSettings.forEach((f) => f()); });
   listen('main-action', runAction);
@@ -49,6 +50,32 @@ function runAction(a) {
   if (!a) return;
   if (a === 'add') openAdd();
   else if (a === 'playlist' || a.startsWith('playlist:')) openPlaylist(a.slice('playlist:'.length));
+}
+
+/**
+ * Downloads that changed (progress, speed, state…); the list itself is the same. While the order and the filter
+ * cannot be affected, only their rows are redrawn; otherwise the whole list is.
+ */
+function applyChanged(changed) {
+  const at = new Map(state.items.map((it, i) => [it.id, i]));
+  let rowsOnly = !state.search && (state.sort.key === 'date' || state.sort.key === 'name');
+  for (const it of changed) {
+    const i = at.get(it.id);
+    if (i === undefined) {
+      // Not in this window's list (an update was missed): take the whole list again.
+      invoke('bootstrap').then((b) => { state.items = b.items; refresh(); });
+      return;
+    }
+    const old = state.items[i];
+    if (old.state !== it.state || old.category !== it.category || old.fileName !== it.fileName) rowsOnly = false;
+    state.items[i] = it;
+  }
+  if (!rowsOnly) { refresh(); return; }
+  for (const it of changed) {
+    const r = rows.get(it.id);
+    if (r) updateRow(r, it, false);
+  }
+  renderStatus();
 }
 
 function refresh() {
@@ -166,7 +193,8 @@ function statusText(it) {
     case 'cancelled': return t('Cancelled');
     default: {
       const pct = it.totalBytes > 0 ? `${Math.floor(progressOf(it) * 100)}% ` : '';
-      if (it.kind === 'video' && it.state === 'downloading' && it.stage) return pct + it.stage;
+      // Videos: yt-dlp's phase. Files: "Reconnecting…" while no data arrives.
+      if (it.state === 'downloading' && it.stage) return pct + it.stage;
       return pct + stateLabel(it.state);
     }
   }

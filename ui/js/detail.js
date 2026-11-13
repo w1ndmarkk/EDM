@@ -44,6 +44,8 @@ async function init() {
 
   update(await invoke('get_item', { id }));
   listen('items', (items) => update(items.find((i) => i.id === id) || null));
+  // Only the downloads that changed: this one may not be among them.
+  listen('items-changed', (items) => { const it = items.find((i) => i.id === id); if (it) update(it); });
   listen('settings', (s) => { settings = s; $('#autoClose').checked = s.autoCloseDetail; });
   window.addEventListener('resize', () => drawBar());
 }
@@ -92,7 +94,7 @@ function infoRows(container, rows) {
 function statusLine(it) {
   if (it.state === 'downloading') {
     if (it.kind === 'video') return it.stage || t('Downloading with yt-dlp…');
-    return t('Receiving data…');
+    return it.stage || t('Receiving data…');
   }
   if (it.state === 'failed') return it.errorMessage || t('Error');
   return stateLabel(it.state);

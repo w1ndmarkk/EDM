@@ -87,13 +87,16 @@ pub struct DownloadItem {
     pub subfolder: Option<String>,
     /// A form's answer (base64 body): requested with POST and this body, as the browser did.
     pub post_body: Option<String>,
+    /// The file's ETag / Last-Modified as the server gave them: partial data continues only for the same file.
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
 
     // Not persisted.
     #[serde(skip)]
     pub speed: f64,
     #[serde(skip)]
     pub log: String,
-    /// yt-dlp: current phase (downloading video/audio, merging…).
+    /// yt-dlp: current phase (downloading video/audio, merging…). Files: "Reconnecting…" while no data arrives.
     #[serde(skip)]
     pub stage: String,
     /// The site only lets the browser download this file (bot check): the extension that handed it over takes
@@ -130,6 +133,8 @@ impl Default for DownloadItem {
             stalled_since: None,
             subfolder: None,
             post_body: None,
+            etag: None,
+            last_modified: None,
             speed: 0.0,
             log: String::new(),
             stage: String::new(),
@@ -154,7 +159,7 @@ impl DownloadItem {
 }
 
 /// What the UI sees (no log, plus derived fields).
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemView {
     pub id: Uuid,
